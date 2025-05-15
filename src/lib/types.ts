@@ -1,5 +1,8 @@
 
 export interface UserProfile {
+  name: string;
+  email: string;
+  linkedin?: string; // Optional LinkedIn URL
   department: string;
   role: string;
 }

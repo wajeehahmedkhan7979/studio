@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -28,7 +29,7 @@ export default function CSMPage() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [questions, setQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<number, string>>({}); // Store answers as Record<number, string>
   
   const [generatedReport, setGeneratedReport] = useState<string | null>(null);
   
@@ -47,17 +48,25 @@ export default function CSMPage() {
         setQuestions(savedProgress.questions);
         setAnswers(savedProgress.answers || {});
         setCurrentQuestionIndex(savedProgress.currentQuestionIndex || 0);
-        setAppState('questionnaire');
+        if (Object.keys(savedProgress.answers || {}).length === savedProgress.questions.length && savedProgress.questions.length > 0) {
+          // If all questions answered, consider if we should show report or questionnaire
+          // For now, let's go to questionnaire, user can submit again
+           setAppState('questionnaire');
+        } else {
+           setAppState('questionnaire');
+        }
         return;
       }
-      // If profile exists but no questionnaire progress, might mean they submitted form but didn't start questions
-      // Or, they completed and we should show form again or a "start new" option.
-      // For now, let's prompt for questions if profile exists but no questions.
-      handleFetchQuestions(savedProfile);
+      // If profile exists but no questionnaire progress, fetch questions
+      if (savedProfile.department && savedProfile.role) { // Ensure department and role exist
+         handleFetchQuestions(savedProfile);
+      } else {
+         setAppState('form'); // if essential profile info missing, go to form
+      }
       return;
     }
     setAppState('form');
-  }, []);
+  }, []); // Removed handleFetchQuestions from dependencies to avoid re-triggering
 
   useEffect(() => {
     loadSavedData();
@@ -70,10 +79,11 @@ export default function CSMPage() {
     try {
       const tailorInput: TailorQuestionsInput = { department: profile.department, role: profile.role };
       const result: TailorQuestionsOutput = await tailorQuestions(tailorInput);
-      setQuestions(result.questions || []);
+      const fetchedQuestions = result.questions || [];
+      setQuestions(fetchedQuestions);
       setAnswers({}); // Reset answers for new questions
       setCurrentQuestionIndex(0);
-      saveQuestionnaireProgress({ questions: result.questions, answers: {}, currentQuestionIndex: 0 });
+      saveQuestionnaireProgress({ questions: fetchedQuestions, answers: {}, currentQuestionIndex: 0 });
       setAppState('questionnaire');
     } catch (e) {
       console.error("Error tailoring questions:", e);
@@ -92,7 +102,16 @@ export default function CSMPage() {
   const handleDepartmentRoleSubmit = (profile: UserProfile) => {
     setUserProfile(profile);
     saveUserProfile(profile);
-    handleFetchQuestions(profile);
+    // Check if questions are already loaded for this profile from progress
+    const savedProgress = loadQuestionnaireProgress();
+    if (savedProgress && savedProgress.profile?.department === profile.department && savedProgress.profile?.role === profile.role && savedProgress.questions?.length) {
+        setQuestions(savedProgress.questions);
+        setAnswers(savedProgress.answers || {});
+        setCurrentQuestionIndex(savedProgress.currentQuestionIndex || 0);
+        setAppState('questionnaire');
+    } else {
+        handleFetchQuestions(profile);
+    }
   };
 
   const handleAnswerChange = (answerText: string) => {
@@ -135,21 +154,35 @@ export default function CSMPage() {
     setError(null);
     setAppState('loading');
 
-    const responsesArray = questions.map((q, idx) => ({
-      question: q,
-      answer: answers[idx] || "No answer provided",
-    }));
+    if (!userProfile) {
+      setError("User profile is not available. Please fill out the form again.");
+      setIsLoading(false);
+      setAppState('form');
+      return;
+    }
     
+    // Convert answers keys from number to string for Zod record(z.string())
+    const stringKeyAnswers: Record<string, string> = {};
+    for (const key in answers) {
+      if (answers.hasOwnProperty(key)) {
+        stringKeyAnswers[key.toString()] = answers[parseInt(key)];
+      }
+    }
+
     const reportInput: GenerateReportInput = {
-      responses: JSON.stringify(responsesArray),
+      userProfile: userProfile,
+      questionnaireData: {
+        questions: questions,
+        answers: stringKeyAnswers,
+      },
     };
 
     try {
       const result: GenerateReportOutput = await generateReport(reportInput);
       setGeneratedReport(result.report);
       setAppState('report');
-      // Optionally clear progress after successful report generation
-      // clearQuestionnaireProgress(); // Decided by requirements, for now, keep it.
+      // Optionally clear progress after successful report generation for a truly "new" start next time
+      // clearQuestionnaireProgress(); 
     } catch (e) {
       console.error("Error generating report:", e);
       setError('Failed to generate report. Please try again.');
@@ -175,12 +208,29 @@ export default function CSMPage() {
     setAppState('form');
   };
 
-  if (appState === 'initial' || (appState === 'loading' && !questions.length && !generatedReport)) {
+  // Ensure loadSavedData's handleFetchQuestions call doesn't create infinite loops
+  useEffect(() => {
+    if (appState === 'initial') {
+        const savedProfile = loadUserProfile();
+        if (savedProfile && savedProfile.department && savedProfile.role) {
+            const savedProgress = loadQuestionnaireProgress();
+            if (savedProgress?.questions && savedProgress.questions.length > 0 && savedProgress.profile?.department === savedProfile.department && savedProgress.profile?.role === savedProfile.role) {
+                // Already handled by loadSavedData
+            } else {
+                // handleFetchQuestions(savedProfile); // This line might be problematic if loadSavedData also calls it.
+                                                // loadSavedData is designed to call it if profile exists but no questions.
+            }
+        }
+    }
+  }, [appState]);
+
+
+  if (appState === 'initial' || (appState === 'loading' && !questions.length && !generatedReport && !userProfile?.department)) { // Check userProfile for readiness
     return <LoadingSpinner text="Initializing CSM AI Assistant..." className="mt-20" />;
   }
   
   if (isLoading && appState === 'loading') {
-     return <LoadingSpinner text={generatedReport ? "Generating Report..." : "Loading Questions..."} className="mt-20" />;
+     return <LoadingSpinner text={generatedReport ? "Generating Report..." : (userProfile?.department ? "Loading Questions..." : "Processing...")} className="mt-20" />;
   }
 
   return (
@@ -226,9 +276,9 @@ export default function CSMPage() {
         <ReportDisplay report={generatedReport} onStartNew={handleStartNew} />
       )}
       
-      {(appState === 'questionnaire' || appState === 'form') && (
+      {(appState === 'questionnaire' || appState === 'form' || appState === 'report') && (
          <div className="text-center mt-8">
-          <Button variant="link" onClick={handleStartNew} className="text-destructive hover:text-destructive/80">
+          <Button variant="outline" onClick={handleStartNew} className="text-destructive hover:text-destructive/80 border-destructive hover:border-destructive/80">
             Reset and Start New Questionnaire
           </Button>
         </div>

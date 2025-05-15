@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, type FormEvent } from 'react';
@@ -5,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Building2, UserCog } from 'lucide-react';
+import { Building2, UserCog, User, Mail, Linkedin } from 'lucide-react';
 import type { UserProfile } from '@/lib/types';
 
 interface DepartmentRoleFormProps {
@@ -15,29 +16,76 @@ interface DepartmentRoleFormProps {
 }
 
 export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false }: DepartmentRoleFormProps) {
+  const [name, setName] = useState(initialProfile?.name || '');
+  const [email, setEmail] = useState(initialProfile?.email || '');
+  const [linkedin, setLinkedin] = useState(initialProfile?.linkedin || '');
   const [department, setDepartment] = useState(initialProfile?.department || '');
   const [role, setRole] = useState(initialProfile?.role || '');
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (department && role) {
-      onSubmit({ department, role });
+    if (name && email && department && role) {
+      onSubmit({ name, email, linkedin, department, role });
     }
   };
 
   return (
-    <Card className="w-full max-w-md mx-auto shadow-xl">
+    <Card className="w-full max-w-lg mx-auto shadow-xl">
       <CardHeader>
         <CardTitle className="flex items-center text-2xl">
           <ShieldCheckIcon className="w-8 h-8 mr-2 text-primary" />
           User Information
         </CardTitle>
         <CardDescription>
-          Please provide your department and role to tailor the security questions.
+          Please provide your details and role to tailor the security questions.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="name" className="flex items-center text-base">
+              <User className="w-5 h-5 mr-2 text-primary" />
+              Full Name
+            </Label>
+            <Input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g., John Doe"
+              required
+              className="text-base"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email" className="flex items-center text-base">
+              <Mail className="w-5 h-5 mr-2 text-primary" />
+              Email Address
+            </Label>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="e.g., john.doe@example.com"
+              required
+              className="text-base"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="linkedin" className="flex items-center text-base">
+              <Linkedin className="w-5 h-5 mr-2 text-primary" />
+              LinkedIn Profile (Optional)
+            </Label>
+            <Input
+              id="linkedin"
+              type="url"
+              value={linkedin}
+              onChange={(e) => setLinkedin(e.target.value)}
+              placeholder="e.g., https://linkedin.com/in/johndoe"
+              className="text-base"
+            />
+          </div>
           <div className="space-y-2">
             <Label htmlFor="department" className="flex items-center text-base">
               <Building2 className="w-5 h-5 mr-2 text-primary" />
@@ -70,7 +118,7 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
           </div>
         </CardContent>
         <CardFooter>
-          <Button type="submit" className="w-full text-lg py-3" disabled={isLoading}>
+          <Button type="submit" className="w-full text-lg py-3" disabled={isLoading || !name || !email || !department || !role}>
             {isLoading ? 'Loading...' : 'Start Questionnaire'}
           </Button>
         </CardFooter>

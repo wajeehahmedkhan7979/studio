@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { AlertCircle, ArrowLeft, ArrowRight, Save, FileText, MessageSquareQuestion } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, Save, FileText, MessageSquareQuote } from 'lucide-react';
 import type { ChangeEvent } from 'react';
 
 interface QuestionCardProps {
@@ -47,7 +47,7 @@ export function QuestionCard({
     <Card className="w-full max-w-2xl mx-auto shadow-xl">
       <CardHeader>
         <CardTitle className="flex items-center text-2xl">
-          <MessageSquareQuestion className="w-8 h-8 mr-3 text-primary" />
+          <MessageSquareQuote className="w-8 h-8 mr-3 text-primary" />
           Question {questionNumber} of {totalQuestions}
         </CardTitle>
         <CardDescription className="text-sm text-muted-foreground pt-1">

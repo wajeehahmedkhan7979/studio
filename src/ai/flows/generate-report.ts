@@ -11,9 +11,9 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
-import type { UserProfile } from '@/lib/types'; // Assuming UserProfile is defined here
+// Assuming UserProfile and NepraAnswer are defined in types.ts
+// For Zod, we need to define them or import Zod schemas if they exist elsewhere.
 
-// Define a Zod schema for UserProfile that matches the one in src/lib/types.ts
 const UserProfileSchema = z.object({
   name: z.string().describe("The user's full name."),
   email: z.string().email().describe("The user's email address."),
@@ -31,7 +31,6 @@ const AnswerDetailSchema = z.object({
 
 const QuestionnaireDataSchema = z.object({
   questions: z.array(z.string()).describe("The list of original questions asked (order matters)."),
-  // answers should map the question *index* (as a string) to the detailed answer object
   answers: z.record(AnswerDetailSchema).describe("A mapping of question index (as string, 0-indexed) to the user's detailed answer object (NepraAnswer).")
 }).describe("The questions asked and the detailed answers provided by the user.");
 
@@ -82,11 +81,16 @@ Number each question sequentially starting from 1 (e.g., Question 1, Question 2,
 
 {{#each questionnaireData.questions}}
 ### Question [Number]: {{{this}}}
-- **User's Answer:** {{{lookup ../questionnaireData.answers @index "answerText"}}}
-- **Answered On:** {{{lookup ../questionnaireData.answers @index "timestamp"}}}
-{{#if (lookup ../questionnaireData.answers @index "nepraCategory")}}
-- **NEPRA Category:** {{{lookup ../questionnaireData.answers @index "nepraCategory"}}}
+{{#with (lookup ../questionnaireData.answers @index)}}
+- **User's Answer:** {{{this.answerText}}}
+- **Answered On:** {{{this.timestamp}}}
+{{#if this.nepraCategory}}
+- **NEPRA Category:** {{{this.nepraCategory}}}
 {{/if}}
+{{else}}
+- **User's Answer:** [No answer provided]
+- **Answered On:** [N/A]
+{{/with}}
 ---
 {{/each}}
 

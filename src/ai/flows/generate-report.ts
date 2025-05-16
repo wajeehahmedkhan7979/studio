@@ -59,9 +59,10 @@ Role: {{{userProfile.role}}}
 
 ---
 Questions & Answers:
+Present the following questions and their corresponding user answers. Number each question-answer pair sequentially starting from 1.
 {{#each questionnaireData.questions}}
-Question {{add @index 1}}: {{{this}}}
-Answer: {{{lookup ../questionnaireData.answers @index}}}
+Question: {{{this}}}
+User's Answer: {{{lookup ../questionnaireData.answers @index}}}
 ---
 {{/each}}
 
@@ -82,3 +83,4 @@ const generateReportFlow = ai.defineFlow(
     return output!;
   }
 );
+

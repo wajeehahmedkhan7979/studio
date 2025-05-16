@@ -1,4 +1,5 @@
-import { ShieldCheck } from 'lucide-react';
+
+import { ShieldCheck } from 'lucide-react'; // ShieldCheck still seems appropriate
 
 export function Header() {
   return (
@@ -7,8 +8,8 @@ export function Header() {
         <div className="flex h-20 items-center justify-between">
           <div className="flex items-center">
             <ShieldCheck className="h-10 w-10 mr-3" />
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-              CSM AI Assistant
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
+              Cybersecurity Compliance Agent (NEPRA)
             </h1>
           </div>
           {/* Navigation items can be added here if needed */}

@@ -1,16 +1,17 @@
-import type { UserProfile, QuestionnaireData } from './types';
 
-const USER_PROFILE_KEY = 'csmAssistantProfile';
-const QUESTIONNAIRE_PROGRESS_KEY = 'csmAssistantProgress';
+import type { UserProfile, NepraQuestionnaireProgress, NepraSessionData } from './types';
 
-// User Profile
-export const saveUserProfile = (profile: UserProfile): void => {
+const USER_PROFILE_KEY = 'nepraAgentUserProfile'; // Changed key for new app
+const SESSION_PROGRESS_KEY = 'nepraAgentSessionProgress'; // Changed key for new app
+
+// User Profile (collected once, could be part of session)
+export const saveUserProfileToStorage = (profile: UserProfile): void => {
   if (typeof window !== 'undefined') {
     localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
   }
 };
 
-export const loadUserProfile = (): UserProfile | null => {
+export const loadUserProfileFromStorage = (): UserProfile | null => {
   if (typeof window !== 'undefined') {
     const data = localStorage.getItem(USER_PROFILE_KEY);
     return data ? JSON.parse(data) : null;
@@ -18,32 +19,38 @@ export const loadUserProfile = (): UserProfile | null => {
   return null;
 };
 
-// Questionnaire Progress
-export const saveQuestionnaireProgress = (progress: Partial<QuestionnaireData>): void => {
+// Nepra Session Progress
+export const saveSessionProgress = (progress: NepraQuestionnaireProgress): void => {
    if (typeof window !== 'undefined') {
-    const existingProgress = loadQuestionnaireProgress() || {};
+    const existingProgress = loadSessionProgress() || {};
     const newProgress = { ...existingProgress, ...progress };
-    localStorage.setItem(QUESTIONNAIRE_PROGRESS_KEY, JSON.stringify(newProgress));
+    localStorage.setItem(SESSION_PROGRESS_KEY, JSON.stringify(newProgress));
   }
 };
 
-export const loadQuestionnaireProgress = (): Partial<QuestionnaireData> | null => {
+export const loadSessionProgress = (): NepraQuestionnaireProgress | null => {
   if (typeof window !== 'undefined') {
-    const data = localStorage.getItem(QUESTIONNAIRE_PROGRESS_KEY);
+    const data = localStorage.getItem(SESSION_PROGRESS_KEY);
+    // Basic validation could be added here if needed
     return data ? JSON.parse(data) : null;
   }
   return null;
 };
 
-export const clearQuestionnaireProgress = (): void => {
+export const clearSessionProgress = (): void => {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem(QUESTIONNAIRE_PROGRESS_KEY);
+    localStorage.removeItem(SESSION_PROGRESS_KEY);
   }
 };
 
-export const clearAllData = (): void => {
+// Utility to generate a simple unique ID for sessions
+export const generateSessionId = (): string => {
+  return `session_${new Date().getTime()}_${Math.random().toString(36).substring(2, 9)}`;
+};
+
+export const clearAllNepraData = (): void => {
   if (typeof window !== 'undefined') {
     localStorage.removeItem(USER_PROFILE_KEY);
-    localStorage.removeItem(QUESTIONNAIRE_PROGRESS_KEY);
+    localStorage.removeItem(SESSION_PROGRESS_KEY);
   }
 }

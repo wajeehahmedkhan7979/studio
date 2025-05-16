@@ -1,12 +1,12 @@
 
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Building2, UserCog, User, Mail, Linkedin } from 'lucide-react';
+import { Building2, UserCog, User, Mail, Linkedin, ShieldCheck } from 'lucide-react';
 import type { UserProfile } from '@/lib/types';
 
 interface DepartmentRoleFormProps {
@@ -15,12 +15,40 @@ interface DepartmentRoleFormProps {
   isLoading?: boolean;
 }
 
+const nepraDepartments = [
+  "Security Policy",
+  "Access Rights Management",
+  "VAPT (Vulnerability Assessment and Penetration Testing)",
+  "Monitoring and Incident Response",
+  "Training and Awareness",
+  "Data Backup and Confidentiality",
+  "Audit and Compliance",
+  "Reporting",
+  "SOC (Security Operations Center)",
+  "PowerCERT Coordination",
+  "IT Operations",
+  "OT Operations",
+  "Human Resources",
+  "Legal",
+  "Other",
+];
+
 export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false }: DepartmentRoleFormProps) {
   const [name, setName] = useState(initialProfile?.name || '');
   const [email, setEmail] = useState(initialProfile?.email || '');
   const [linkedin, setLinkedin] = useState(initialProfile?.linkedin || '');
   const [department, setDepartment] = useState(initialProfile?.department || '');
   const [role, setRole] = useState(initialProfile?.role || '');
+
+  useEffect(() => {
+    if (initialProfile) {
+      setName(initialProfile.name || '');
+      setEmail(initialProfile.email || '');
+      setLinkedin(initialProfile.linkedin || '');
+      setDepartment(initialProfile.department || '');
+      setRole(initialProfile.role || '');
+    }
+  }, [initialProfile]);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -33,11 +61,11 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
     <Card className="w-full max-w-lg mx-auto shadow-xl">
       <CardHeader>
         <CardTitle className="flex items-center text-2xl">
-          <ShieldCheckIcon className="w-8 h-8 mr-2 text-primary" />
-          User Information
+          <ShieldCheck className="w-8 h-8 mr-2 text-primary" />
+          User & Role Information
         </CardTitle>
         <CardDescription>
-          Please provide your details and role to tailor the security questions.
+          Please provide your details. This information is crucial for tailoring the NEPRA compliance questionnaire and generating accurate reports.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
@@ -52,7 +80,7 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., John Doe"
+              placeholder="e.g., Ahmed Khan"
               required
               className="text-base"
             />
@@ -60,14 +88,14 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
           <div className="space-y-2">
             <Label htmlFor="email" className="flex items-center text-base">
               <Mail className="w-5 h-5 mr-2 text-primary" />
-              Email Address
+              Official Email Address
             </Label>
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g., john.doe@example.com"
+              placeholder="e.g., ahmed.khan@company.com.pk"
               required
               className="text-base"
             />
@@ -82,7 +110,7 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
               type="url"
               value={linkedin}
               onChange={(e) => setLinkedin(e.target.value)}
-              placeholder="e.g., https://linkedin.com/in/johndoe"
+              placeholder="e.g., https://linkedin.com/in/ahmedkhan"
               className="text-base"
             />
           </div>
@@ -96,22 +124,27 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
               type="text"
               value={department}
               onChange={(e) => setDepartment(e.target.value)}
-              placeholder="e.g., IT, Engineering, HR"
+              placeholder="e.g., Security Policy, VAPT, Monitoring"
+              list="nepra-departments-list"
               required
               className="text-base"
             />
+            <datalist id="nepra-departments-list">
+              {nepraDepartments.map(dep => <option key={dep} value={dep} />)}
+            </datalist>
+            <p className="text-xs text-muted-foreground">Select or type your department. Examples include: {nepraDepartments.slice(0,3).join(', ')}, etc.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="role" className="flex items-center text-base">
               <UserCog className="w-5 h-5 mr-2 text-primary" />
-              Role
+              Role / Designation
             </Label>
             <Input
               id="role"
               type="text"
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              placeholder="e.g., Manager, Analyst, Specialist"
+              placeholder="e.g., Compliance Officer, Security Analyst, Manager IT"
               required
               className="text-base"
             />
@@ -119,31 +152,10 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
         </CardContent>
         <CardFooter>
           <Button type="submit" className="w-full text-lg py-3" disabled={isLoading || !name || !email || !department || !role}>
-            {isLoading ? 'Loading...' : 'Start Questionnaire'}
+            {isLoading ? 'Loading...' : 'Start Compliance Questionnaire'}
           </Button>
         </CardFooter>
       </form>
     </Card>
   );
-}
-
-// Helper Icon (can be moved to a shared icon file if used elsewhere)
-function ShieldCheckIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  )
 }

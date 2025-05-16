@@ -1,3 +1,4 @@
+
 import type {Metadata} from 'next';
 import {Geist, Geist_Mono} from 'next/font/google';
 import './globals.css';
@@ -14,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'CSM AI Assistant',
-  description: 'AI-powered assistant for CSM framework by SOFTWARE PRODUCTIVITY STRATAGISTS',
+  title: 'AI-Powered Cybersecurity Compliance Agent',
+  description: 'NEPRA-aligned data collection and reporting for Pakistan’s power sector by SOFTWARE PRODUCTIVITY STRATAGISTS',
 };
 
 export default function RootLayout({

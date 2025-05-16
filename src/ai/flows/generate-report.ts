@@ -78,9 +78,10 @@ Session ID: {{{sessionId}}}
 
 This section details the questions posed to the user and their responses, timestamped.
 Organize the Q&A pairs. If a NEPRA category is available for a question, use it as a sub-header. If not, list them sequentially.
+Number each question sequentially starting from 1 (e.g., Question 1, Question 2, etc.).
 
 {{#each questionnaireData.questions}}
-### Question {{add @index 1}} : {{{this}}}
+### Question [Number]: {{{this}}}
 - **User's Answer:** {{{lookup ../questionnaireData.answers @index "answerText"}}}
 - **Answered On:** {{{lookup ../questionnaireData.answers @index "timestamp"}}}
 {{#if (lookup ../questionnaireData.answers @index "nepraCategory")}}
@@ -113,23 +114,6 @@ const generateNepraReportFlow = ai.defineFlow(
     outputSchema: GenerateNepraReportOutputSchema,
   },
   async input => {
-    // Helper for Handlebars 'add'
-    const Handlebars = require('handlebars');
-    Handlebars.registerHelper('add', function (a: number, b: number) {
-      return a + b;
-    });
-    // Helper for Handlebars 'lookup' to access nested properties
-    Handlebars.registerHelper('lookup', function(obj: any, field: any, nestedField?: string) {
-      if (obj && obj[field]) {
-        if (nestedField && typeof obj[field] === 'object' && obj[field] !== null) {
-          return obj[field][nestedField];
-        }
-        return obj[field];
-      }
-      return '';
-    });
-
-
     const {output} = await generateNepraReportPrompt(input);
     if (!output || !output.reportContent) {
         console.error('AI did not return report content. Output:', output);

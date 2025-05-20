@@ -1,8 +1,5 @@
 
-// import { initializeApp, getApp, FirebaseApp } from 'firebase/app';
-// import { getFirestore, doc, setDoc, getDoc, Firestore, updateDoc, collection, addDoc } from 'firebase/firestore';
-// import { getStorage, ref, uploadString, getDownloadURL, FirebaseStorage } from 'firebase/storage';
-import type { NepraSessionData, UserProfile, NepraAnswer } from './types';
+import type { UserProfile, ComplianceSession, ResponseData, QuestionDefinition } from './types';
 
 // TODO: Add your Firebase configuration here
 const firebaseConfig = {
@@ -14,122 +11,132 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// let app: FirebaseApp;
-// let db: Firestore;
-// let storage: FirebaseStorage;
-
-// try {
-//   app = getApp();
-// } catch (e) {
-//   app = initializeApp(firebaseConfig);
-// }
-
-// db = getFirestore(app);
-// storage = getStorage(app);
+// MOCK IMPLEMENTATIONS - REPLACE WITH ACTUAL FIREBASE SDK CALLS
 
 /**
- * NOTE: These are placeholder functions.
- * You will need to install and configure the Firebase SDK for these to work.
- * Example: `npm install firebase`
- * And then uncomment the imports and Firebase initialization code above.
- * Ensure your Firebase project has Firestore and Storage enabled and configured
- * with appropriate security rules.
+ * Fetches predefined NEPRA questions.
+ * In a real app, this might query a 'questions' collection in Firestore,
+ * potentially filtering by category, department, or role if questions are tagged.
+ * For now, this is a stub. The AI currently generates questions.
  */
-
-// Firestore Service Stubs
-
-/**
- * Saves or updates a user's session data in Firestore.
- * The document ID will be the session.sessionId.
- * Collection path: /departments/{department}/roles/{role}/sessions/{sessionId}
- * Or a simpler path: /nepraSessions/{sessionId}
- */
-export const saveSessionToFirestore = async (sessionData: NepraSessionData): Promise<void> => {
-  console.log('Mock Firestore: Attempting to save session', sessionData.sessionId, sessionData);
-  if (!sessionData.userProfile.department || !sessionData.userProfile.role || !sessionData.sessionId) {
-    console.error('Mock Firestore: Missing department, role, or sessionId. Cannot save.');
-    return Promise.reject(new Error('Missing department, role, or sessionId.'));
-  }
-  // const sessionDocRef = doc(db, 'departments', sessionData.userProfile.department, 'roles', sessionData.userProfile.role, 'sessions', sessionData.sessionId);
-  // For simplicity, using a single collection for all sessions:
-  // const sessionDocRef = doc(db, 'nepraSessions', sessionData.sessionId);
-  // await setDoc(sessionDocRef, sessionData, { merge: true });
-  console.log(`Mock Firestore: Session ${sessionData.sessionId} data would be saved/merged.`);
-  return Promise.resolve();
+export const getNepraQuestions = async (params?: { department?: string; role?: string; category?: string }): Promise<QuestionDefinition[]> => {
+  console.log('Mock Firestore: getNepraQuestions called with params:', params);
+  // Simulate fetching questions. In a real scenario, query Firestore.
+  // Example: query(collection(db, 'questions'), where('category', '==', params.category))
+  const mockQuestions: QuestionDefinition[] = [
+    { id: 'q1', category: 'Access Control', questionText: 'Describe your process for password changes.' },
+    { id: 'q2', category: 'Incident Response', questionText: 'How do you report a security incident?' },
+  ];
+  console.warn('Mock Firestore: Returning canned questions. Implement actual Firestore query.');
+  return Promise.resolve(mockQuestions);
 };
 
 /**
- * Loads a user's session data from Firestore using the sessionId.
+ * Starts a new compliance session in Firestore.
+ * Collection path: /sessions/{sessionId}
  */
-export const loadSessionFromFirestore = async (sessionId: string): Promise<NepraSessionData | null> => {
+export const startNewComplianceSession = async (sessionData: Partial<ComplianceSession>): Promise<string> => {
+  const sessionId = sessionData.sessionId || `session_${new Date().getTime()}`;
+  console.log('Mock Firestore: Starting new session', sessionId, sessionData);
+  // const sessionDocRef = doc(db, 'sessions', sessionId);
+  // await setDoc(sessionDocRef, { ...sessionData, sessionId, status: 'active' }, { merge: true });
+  console.log(`Mock Firestore: Session ${sessionId} data would be created/merged.`);
+  return Promise.resolve(sessionId);
+};
+
+/**
+ * Retrieves a compliance session and its responses from Firestore.
+ * Session: /sessions/{sessionId}
+ * Responses: /sessions/{sessionId}/responses/{responseId} (or all responses)
+ */
+export const getComplianceSession = async (sessionId: string): Promise<ComplianceSession | null> => {
   console.log('Mock Firestore: Attempting to load session', sessionId);
-  // This is a mock. In a real scenario, you'd query Firestore.
-  // Example structure of a path, adjust as per your Firestore structure:
-  // const sessionDocRef = doc(db, 'nepraSessions', sessionId);
-  // const docSnap = await getDoc(sessionDocRef);
-  // if (docSnap.exists()) {
-  //   return docSnap.data() as NepraSessionData;
+  // const sessionDocRef = doc(db, 'sessions', sessionId);
+  // const sessionSnap = await getDoc(sessionDocRef);
+  // if (!sessionSnap.exists()) {
+  //   console.warn(`Mock Firestore: Session ${sessionId} not found.`);
+  //   return null;
   // }
-  console.warn(`Mock Firestore: Session ${sessionId} not found. Returning null.`);
-  return Promise.resolve(null);
+  // const sessionData = sessionSnap.data() as ComplianceSession;
+
+  // Load responses (subcollection)
+  // const responsesQuery = query(collection(db, 'sessions', sessionId, 'responses'));
+  // const responsesSnap = await getDocs(responsesQuery);
+  // const responses: Record<string, ResponseData> = {};
+  // responsesSnap.forEach(doc => responses[doc.id] = doc.data() as ResponseData);
+  // sessionData.responses = responses;
+
+  console.warn(`Mock Firestore: Session ${sessionId} not found or mock retrieval. Returning null.`);
+  // This is a placeholder. In a real app, you'd fetch and construct this.
+  return Promise.resolve(null); // Or a mock session object if needed for testing UI flow
 };
 
 /**
- * Adds a single answer to a session's answers array/map in Firestore.
- * This might be more efficient than saving the whole session object each time.
+ * Adds a response to a session's 'responses' subcollection in Firestore.
+ * Path: /sessions/{sessionId}/responses/{questionId} (using questionId as doc ID for simplicity)
  */
-export const addAnswerToSessionInFirestore = async (
+export const addResponseToSession = async (
   sessionId: string,
-  department: string,
-  role: string,
-  questionIndex: number,
-  answer: NepraAnswer
+  responseData: ResponseData
 ): Promise<void> => {
-  console.log(`Mock Firestore: Adding answer to session ${sessionId}, qIndex ${questionIndex}`, answer);
-  // const sessionDocRef = doc(db, 'departments', department, 'roles', role, 'sessions', sessionId);
-  // const sessionDocRef = doc(db, 'nepraSessions', sessionId);
-  // Field path for map: `answers.${questionIndex}`
-  // await updateDoc(sessionDocRef, {
-  //   [`answers.${questionIndex}`]: answer,
-  //   lastSavedTime: new Date().toISOString(),
-  // });
-  console.log(`Mock Firestore: Answer for question ${questionIndex} in session ${sessionId} would be updated.`);
+  console.log(`Mock Firestore: Adding response to session ${sessionId} for question ${responseData.questionId}`, responseData);
+  // const responseDocRef = doc(db, 'sessions', sessionId, 'responses', responseData.questionId);
+  // await setDoc(responseDocRef, responseData);
+  // Also update session's lastSavedTime
+  // await updateComplianceSession(sessionId, { lastSavedTime: new Date().toISOString() });
+  console.log(`Mock Firestore: Response for question ${responseData.questionId} in session ${sessionId} would be saved.`);
   return Promise.resolve();
 };
 
-
-// Firebase Storage Service Stubs
+/**
+ * Updates specific fields in a session document in Firestore.
+ * Path: /sessions/{sessionId}
+ */
+export const updateComplianceSession = async (
+  sessionId: string,
+  dataToUpdate: Partial<ComplianceSession>
+): Promise<void> => {
+  console.log(`Mock Firestore: Updating session ${sessionId} with`, dataToUpdate);
+  // const sessionDocRef = doc(db, 'sessions', sessionId);
+  // await updateDoc(sessionDocRef, dataToUpdate);
+  console.log(`Mock Firestore: Session ${sessionId} would be updated.`);
+  return Promise.resolve();
+};
 
 /**
- * Uploads the generated report content (Markdown string) to Firebase Storage.
- * Returns the download URL of the uploaded file.
- * Path: reports/{sessionId}/{reportName}.md
+ * Uploads the generated report content (Markdown or PDF path) to Firebase Storage.
+ * Returns the download URL or storage path of the uploaded file.
+ * Path: reports/{sessionId}/{reportName}
  */
 export const uploadReportToStorage = async (
   sessionId: string,
-  reportContent: string,
-  reportName: string = `nepra_compliance_report_${sessionId}.md`
+  reportContentOrFile: string | File, // Could be Markdown string or File object for PDF
+  reportName: string = `nepra_compliance_report_${sessionId}`
 ): Promise<string> => {
   console.log('Mock Storage: Attempting to upload report for session', sessionId);
   if (!sessionId) {
     console.error('Mock Storage: Missing sessionId. Cannot upload report.');
     return Promise.reject(new Error('Missing sessionId for report upload.'));
   }
-  // const reportRef = ref(storage, `reports/${sessionId}/${reportName}`);
-  // await uploadString(reportRef, reportContent, 'raw'); // 'raw' for string, or use 'data_url' if it's base64
+  const reportExtension = typeof reportContentOrFile === 'string' ? '.md' : '.pdf';
+  const fullReportName = reportName.endsWith(reportExtension) ? reportName : reportName + reportExtension;
+  
+  // const reportRef = ref(storage, `reports/${sessionId}/${fullReportName}`);
+  // if (typeof reportContentOrFile === 'string') {
+  //   await uploadString(reportRef, reportContentOrFile, 'raw');
+  // } else {
+  //   await uploadBytes(reportRef, reportContentOrFile);
+  // }
   // const downloadURL = await getDownloadURL(reportRef);
-  const mockDownloadURL = `https://storage.example.com/reports/${sessionId}/${reportName}`;
+  
+  const mockDownloadURL = `https://storage.example.com/reports/${sessionId}/${fullReportName}`;
   console.log(`Mock Storage: Report for session ${sessionId} would be uploaded. Mock URL: ${mockDownloadURL}`);
-  // return downloadURL;
   return Promise.resolve(mockDownloadURL);
 };
 
-// You might also want functions to list reports for an admin panel, etc.
-// These are highly dependent on your Firestore structure and admin requirements.
 
-console.log("Mock Firebase Services Initialized (Stubs)");
+console.log("Mock Firebase Services Initialized (Stubs for new data model)");
 // To enable real Firebase:
-// 1. Fill firebaseConfig with your project details (ideally from .env.local).
-// 2. Uncomment Firebase SDK imports and initialization code at the top.
-// 3. Ensure Firebase is set up in your project (`npm install firebase`).
-// 4. Configure Firestore/Storage rules in the Firebase console.
+// 1. Fill firebaseConfig, install SDK, uncomment SDK imports and init.
+// 2. Implement actual Firestore/Storage calls using the Firebase SDK.
+// 3. Configure Firestore/Storage rules in the Firebase console.

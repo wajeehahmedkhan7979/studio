@@ -33,6 +33,8 @@ export default function NepraCompliancePage() {
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generatedReportContent, setGeneratedReportContent] = useState<string | null>(null);
+
 
   const { toast } = useToast();
 
@@ -247,17 +249,17 @@ export default function NepraCompliancePage() {
     setError(null);
     setAppState('loading');
 
-    // Prepare answers for the report generator (string-indexed, string answers)
-    const reportAnswers: Record<string, any> = {};
+    // Prepare answers for the report generator (string-indexed, NepraAnswer objects)
+    const reportAnswers: Record<string, NepraAnswer> = {};
     Object.entries(sessionData.answers).forEach(([index, nepraAnswer]) => {
-      reportAnswers[index] = nepraAnswer; // Pass the whole NepraAnswer object
+      reportAnswers[index] = nepraAnswer;
     });
 
     const reportInput: GenerateNepraReportInput = {
       userProfile: sessionData.userProfile,
       questionnaireData: {
         questions: sessionData.questions,
-        answers: reportAnswers,
+        answers: reportAnswers, // Pass the correctly typed answers
       },
       sessionId: sessionData.sessionId,
       reportDate: new Date().toLocaleDateString('en-CA'), // YYYY-MM-DD
@@ -265,6 +267,8 @@ export default function NepraCompliancePage() {
 
     try {
       const result: GenerateNepraReportOutput = await generateNepraReport(reportInput);
+      setGeneratedReportContent(result.reportContent); // Store the generated report content
+
       const updatedSession = { ...sessionData, reportGenerated: true, completedTime: new Date().toISOString() };
       
       // Try to upload report to Firebase Storage
@@ -305,6 +309,7 @@ export default function NepraCompliancePage() {
   const handleStartNew = () => {
     clearAllNepraData();
     setSessionData(null);
+    setGeneratedReportContent(null);
     setUserProfile(loadUserProfileFromStorage()); // Pre-fill if previous basic info exists
     setError(null);
     setAppState('form');
@@ -359,23 +364,19 @@ export default function NepraCompliancePage() {
         </div>
       )}
 
-      {appState === 'report' && sessionData?.reportGenerated && sessionData.answers && (
+      {appState === 'report' && generatedReportContent && (
         <ReportDisplay 
-            report={(sessionData.answers[0] as unknown as GenerateNepraReportOutput)?.reportContent || "Report content not available."} // Bit of a hack to get report content, needs proper state
+            report={generatedReportContent}
             onStartNew={handleStartNew} 
+            reportUrl={sessionData?.reportUrl}
         />
       )}
-       {/* Temporary fix for report display - Ideally, generatedReport would be a separate state variable.
-           The current structure stores the report in sessionData.answers[0] which is incorrect.
-           A proper fix would be to have a `generatedReportContent: string | null` state.
-           For now, assuming the report generation flow returns the content and it's somehow accessible.
-           The ReportDisplay component expects `report: string`.
-       */}
-       {appState === 'report' && sessionData && !sessionData.answers && (
+       
+       {appState === 'report' && !generatedReportContent && (
             <Alert variant="destructive" className="max-w-2xl mx-auto">
                 <AlertCircle className="h-4 w-4" />
                 <AlertTitle>Report Display Error</AlertTitle>
-                <AlertDescription>Report content is not in the expected state. Please try generating again.</AlertDescription>
+                <AlertDescription>Report content is not available. Please try generating again.</AlertDescription>
             </Alert>
        )}
       

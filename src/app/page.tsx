@@ -18,10 +18,10 @@ import {
   loadSessionProgress,
   clearAllNepraData,
   generateSessionId,
-  saveUserProfileToStorage, // To save initial profile if needed separately
+  saveUserProfileToStorage, 
   loadUserProfileFromStorage
 } from '@/lib/storage';
-import { saveSessionToFirestore, addAnswerToSessionInFirestore, uploadReportToStorage } from '@/lib/firebaseService'; // Firebase stubs
+import { saveSessionToFirestore, addAnswerToSessionInFirestore, uploadReportToStorage } from '@/lib/firebaseService'; 
 
 type AppState = 'initial' | 'form' | 'questionnaire' | 'report' | 'loading';
 
@@ -29,7 +29,7 @@ export default function NepraCompliancePage() {
   const [appState, setAppState] = useState<AppState>('initial');
   
   const [sessionData, setSessionData] = useState<NepraSessionData | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null); // Kept for form initialization
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null); 
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,41 +57,36 @@ export default function NepraCompliancePage() {
     const savedProgress = loadSessionProgress();
     
     if (savedProgress?.sessionId && savedProgress?.userProfile) {
-      // Potentially re-hydrate from Firestore if full session needed and only partial in localStorage
-      // For now, assume localStorage has enough to continue or fetch questions
       const loadedSession: NepraSessionData = {
         sessionId: savedProgress.sessionId,
         userProfile: savedProgress.userProfile,
         questions: savedProgress.questions || [],
         answers: savedProgress.answers || {},
         currentQuestionIndex: savedProgress.currentQuestionIndex || 0,
-        startTime: savedProgress.startTime || new Date().toISOString(), // Fallback, should be there
-        reportGenerated: false, // Assume false unless specifically loaded
+        startTime: savedProgress.startTime || new Date().toISOString(), 
+        reportGenerated: false, 
       };
       setSessionData(loadedSession);
-      setUserProfile(loadedSession.userProfile); // For form prefill if needed
+      setUserProfile(loadedSession.userProfile); 
 
       if (loadedSession.questions.length > 0) {
         if (Object.keys(loadedSession.answers).length === loadedSession.questions.length && loadedSession.questions.length > 0) {
-          // All questions answered, maybe go to report or allow re-submit
-          setAppState('questionnaire'); // Let user review and submit
+          setAppState('questionnaire'); 
         } else {
           setAppState('questionnaire');
         }
       } else if (loadedSession.userProfile.department && loadedSession.userProfile.role) {
-        // Has profile, but no questions in local storage, fetch them
         await handleFetchQuestions(loadedSession);
       } else {
-        setAppState('form'); // Profile incomplete
+        setAppState('form'); 
       }
     } else {
-      // No saved session, try loading just the user profile for form prefill
       const lastUserProfile = loadUserProfileFromStorage();
-      setUserProfile(lastUserProfile); // Prefill form if available
+      setUserProfile(lastUserProfile); 
       setAppState('form');
     }
     setIsLoading(false);
-  }, []); // No dependencies that would cause re-runs without actual state change
+  }, []); 
 
   useEffect(() => {
     loadSavedSession();
@@ -117,12 +112,12 @@ export default function NepraCompliancePage() {
       if (fetchedQuestions.length === 0 || (fetchedQuestions.length === 1 && fetchedQuestions[0].startsWith("Failed to generate"))) {
         setError(fetchedQuestions[0] || 'No questions were returned for your department/role. Please try again or contact support.');
         toast({ title: "Error", description: "Could not fetch questions.", variant: "destructive" });
-        setAppState('form'); // Go back to form
+        setAppState('form'); 
       } else {
         const updatedSession = {
           ...currentSession,
           questions: fetchedQuestions,
-          answers: {}, // Reset answers for new questions
+          answers: {}, 
           currentQuestionIndex: 0,
         };
         setSessionData(updatedSession);
@@ -134,13 +129,21 @@ export default function NepraCompliancePage() {
           currentQuestionIndex: updatedSession.currentQuestionIndex,
           startTime: updatedSession.startTime,
         });
-        // await saveSessionToFirestore(updatedSession); // Save initial session with questions
         setAppState('questionnaire');
       }
     } catch (e) {
       console.error("Error tailoring questions:", e);
-      setError('Failed to load questions. Please check your connection or try again.');
-      toast({ title: "Error", description: "Could not fetch questions. Please check your connection or try again later.", variant: "destructive"});
+      let userErrorMessage = 'Failed to load questions. Please check your connection or try again.';
+      let userErrorDescription = "Could not fetch questions. Please check your connection or try again later.";
+
+      if (e instanceof Error && e.message) {
+        if (e.message.includes("503") || e.message.toLowerCase().includes("service unavailable") || e.message.toLowerCase().includes("model is overloaded")) {
+          userErrorMessage = "AI Service Overloaded";
+          userErrorDescription = "The AI service is currently experiencing high demand. Please try again in a few minutes.";
+        }
+      }
+      setError(userErrorMessage);
+      toast({ title: "Error", description: userErrorDescription, variant: "destructive"});
       setAppState('form');
     } finally {
       setIsLoading(false);
@@ -148,12 +151,11 @@ export default function NepraCompliancePage() {
   };
 
   const handleDepartmentRoleSubmit = async (profile: UserProfile) => {
-    setUserProfile(profile); // Save for potential re-use if user starts over quickly
-    saveUserProfileToStorage(profile); // Save for form prefill next time
+    setUserProfile(profile); 
+    saveUserProfileToStorage(profile);
 
     const newSession = initializeNewSession(profile);
     setSessionData(newSession);
-    // Save minimal progress to indicate session start
     saveSessionProgress({
       sessionId: newSession.sessionId,
       userProfile: newSession.userProfile,
@@ -162,7 +164,6 @@ export default function NepraCompliancePage() {
       answers: {},
       questions: []
     });
-    // await saveSessionToFirestore(newSession); // Save initial session structure to Firestore
     await handleFetchQuestions(newSession);
   };
 
@@ -174,7 +175,6 @@ export default function NepraCompliancePage() {
       question: sessionData.questions[sessionData.currentQuestionIndex],
       answerText: answerText,
       timestamp: now,
-      // nepraCategory could be assigned here if questions had categories from tailorQuestions
     };
 
     setSessionData(prev => {
@@ -195,9 +195,6 @@ export default function NepraCompliancePage() {
         startTime: sessionData.startTime,
       });
       
-      // Update Firestore (could be optimized to save only changed answer)
-      // For simplicity, saving the relevant parts or just the latest answer.
-      // If saving just the latest answer:
       const currentAnswer = sessionData.answers[sessionData.currentQuestionIndex];
       if (currentAnswer) {
          try {
@@ -212,9 +209,6 @@ export default function NepraCompliancePage() {
             console.error("Firestore save error:", fsError);
             toast({ title: "Sync Error", description: "Could not save progress to cloud.", variant: "destructive" });
          }
-      } else {
-        // Or save the whole session if structure is simple
-        // await saveSessionToFirestore(sessionData);
       }
 
 
@@ -243,35 +237,35 @@ export default function NepraCompliancePage() {
       setAppState('form');
       return;
     }
-    await saveCurrentProgressToStorageAndFirestore(); // Save final answers
+    await saveCurrentProgressToStorageAndFirestore(); 
     
     setIsLoading(true);
     setError(null);
     setAppState('loading');
 
-    // Prepare answers for the report generator (string-indexed, NepraAnswer objects)
     const reportAnswers: Record<string, NepraAnswer> = {};
     Object.entries(sessionData.answers).forEach(([index, nepraAnswer]) => {
       reportAnswers[index] = nepraAnswer;
     });
 
+    const questionnaireDataForReport: QuestionnaireDataForReport = {
+      questions: sessionData.questions,
+      answers: reportAnswers,
+    };
+
     const reportInput: GenerateNepraReportInput = {
       userProfile: sessionData.userProfile,
-      questionnaireData: {
-        questions: sessionData.questions,
-        answers: reportAnswers, // Pass the correctly typed answers
-      },
+      questionnaireData: questionnaireDataForReport,
       sessionId: sessionData.sessionId,
-      reportDate: new Date().toLocaleDateString('en-CA'), // YYYY-MM-DD
+      reportDate: new Date().toLocaleDateString('en-CA'), 
     };
 
     try {
       const result: GenerateNepraReportOutput = await generateNepraReport(reportInput);
-      setGeneratedReportContent(result.reportContent); // Store the generated report content
+      setGeneratedReportContent(result.reportContent);
 
       const updatedSession = { ...sessionData, reportGenerated: true, completedTime: new Date().toISOString() };
       
-      // Try to upload report to Firebase Storage
       try {
         const reportUrl = await uploadReportToStorage(updatedSession.sessionId, result.reportContent);
         updatedSession.reportUrl = reportUrl;
@@ -282,9 +276,7 @@ export default function NepraCompliancePage() {
       }
       
       setSessionData(updatedSession);
-      // await saveSessionToFirestore(updatedSession); // Save final session state with report status
       
-      // Save final progress including report status to local storage
       saveSessionProgress({
           sessionId: updatedSession.sessionId,
           userProfile: updatedSession.userProfile,
@@ -293,7 +285,6 @@ export default function NepraCompliancePage() {
           currentQuestionIndex: updatedSession.currentQuestionIndex,
           startTime: updatedSession.startTime,
       });
-
 
       setAppState('report');
     } catch (e) {
@@ -310,7 +301,7 @@ export default function NepraCompliancePage() {
     clearAllNepraData();
     setSessionData(null);
     setGeneratedReportContent(null);
-    setUserProfile(loadUserProfileFromStorage()); // Pre-fill if previous basic info exists
+    setUserProfile(loadUserProfileFromStorage()); 
     setError(null);
     setAppState('form');
   };
@@ -320,7 +311,7 @@ export default function NepraCompliancePage() {
   }
   
   if (isLoading && appState === 'loading') {
-     return <LoadingSpinner text={sessionData?.reportGenerated ? "Finalizing Report..." : (sessionData?.questions.length ? "Processing..." : "Loading Questions...")} className="mt-20" />;
+     return <LoadingSpinner text={sessionData?.reportGenerated ? "Finalizing Report..." : (sessionData?.questions && sessionData.questions.length > 0 ? "Processing..." : "Loading Questions...")} className="mt-20" />;
   }
 
   return (
@@ -390,3 +381,5 @@ export default function NepraCompliancePage() {
     </div>
   );
 }
+
+    

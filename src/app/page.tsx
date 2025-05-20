@@ -8,7 +8,7 @@ import type {
   ResponseData, 
   QuestionDefinition,
   ReportAnswerDetail,
-  SessionProgress // Keep if used for local storage structure
+  SessionProgress
 } from '@/lib/types';
 import { tailorNepraQuestions, TailorNepraQuestionsInput } from '@/ai/flows/tailor-questions';
 import type { TailoredQuestionsOutput } from '@/ai/flows/tailor-questions';
@@ -29,12 +29,12 @@ import {
   loadUserProfileFromStorage,
   saveActiveSessionReference,
   loadActiveSessionReference,
-  clearActiveSessionReference, // Renamed from clearAllNepraData for clarity
+  clearActiveSessionReference,
   generateSessionId,
 } from '@/lib/storage';
 
 import {
-  isFirebaseInitialized, // Import the flag
+  isFirebaseInitialized, 
   startNewComplianceSession,
   getComplianceSession,
   addResponseToSession,
@@ -42,7 +42,6 @@ import {
   uploadReportToStorage,
 } from '@/lib/firebaseService'; 
 
-// Define QuestionnaireDataForReport if it's used in this file, or import if defined elsewhere
 interface QuestionnaireDataForReport {
   questions: string[];
   answers: Record<string, ReportAnswerDetail>;
@@ -58,30 +57,33 @@ export default function NepraCompliancePage() {
 
   const { toast } = useToast();
 
-  const setAppState = (status: ComplianceSession['status']) => {
-    setCurrentSession(prev => prev ? { ...prev, status } : null);
-  };
+  // Helper to derive appState from currentSession status
   const appState = currentSession?.status || 'initial';
+
+  // Explicit function to set session status, ensuring a session object exists for error status
+  const setSessionErrorState = (errorMessage: string) => {
+    setError(errorMessage);
+    setCurrentSession(prev => ({
+      ...(prev || { // Ensure a minimal session object if none exists
+          sessionId: generateSessionId(), 
+          userProfile: loadUserProfileFromStorage() || { name: '', email: '', department: '', role: '' }, 
+          questions: [], 
+          responses: {}, 
+          currentQuestionIndex: 0, 
+          startTime: new Date().toISOString(), 
+          reportGenerated: false 
+      }),
+      status: 'error'
+    }));
+    setIsLoading(false);
+  };
 
   const initializeOrResumeApp = useCallback(async () => {
     setIsLoading(true);
-    setError(null); // Clear previous errors on re-init
+    setError(null);
     
     if (!isFirebaseInitialized) {
-      setError("CRITICAL: Firebase is not configured. Please ensure all NEXT_PUBLIC_FIREBASE_... environment variables are set correctly in your .env file. Application features relying on Firebase will not work.");
-      setIsLoading(false);
-      setCurrentSession(prev => ({
-        ...(prev || { 
-            sessionId: generateSessionId(), 
-            userProfile: loadUserProfileFromStorage() || { name: '', email: '', department: '', role: '' }, 
-            questions: [], 
-            responses: {}, 
-            currentQuestionIndex: 0, 
-            startTime: new Date().toISOString(), 
-            reportGenerated: false 
-        }),
-        status: 'error'
-      }));
+      setSessionErrorState("CRITICAL: Firebase is not configured. Please ensure all NEXT_PUBLIC_FIREBASE_... environment variables are set correctly in your .env file. Application features relying on Firebase will not work.");
       return; 
     }
     
@@ -95,15 +97,9 @@ export default function NepraCompliancePage() {
         const firestoreSession = await getComplianceSession(activeSessionRef.sessionId);
         if (firestoreSession) {
           if (firestoreSession.status === 'completed' || firestoreSession.reportGenerated) {
-             let reportContentToDisplay = "Previously generated report. Content might be fetched if URL exists.";
+             let reportContentToDisplay = "Previously generated report.";
              if (firestoreSession.reportUrl) {
                 try {
-                    // Attempt to fetch report content if a URL is stored.
-                    // This is a basic fetch, consider adding error handling or a dedicated service.
-                    // const response = await fetch(firestoreSession.reportUrl);
-                    // if (response.ok) reportContentToDisplay = await response.text();
-                    // else reportContentToDisplay = `Previously generated report available at: ${firestoreSession.reportUrl}. Could not fetch preview.`;
-                    // For now, just indicate it's available at URL:
                     reportContentToDisplay = `Report available at: ${firestoreSession.reportUrl}`;
                 } catch (fetchError) {
                     console.error("Error fetching stored report:", fetchError);
@@ -116,7 +112,6 @@ export default function NepraCompliancePage() {
              setIsLoading(false);
              return;
           } else {
-            // Resuming an incomplete session
             const numResponses = Object.keys(firestoreSession.responses || {}).length;
             const currentQuestionIndex = (firestoreSession.questions && firestoreSession.questions.length > 0) 
                                           ? Math.min(numResponses, firestoreSession.questions.length -1) 
@@ -138,11 +133,10 @@ export default function NepraCompliancePage() {
       } catch (e: any) {
         console.error("Error resuming session from Firestore:", e);
         setError(`Failed to resume session: ${e.message}. Starting fresh. Please ensure Firebase is configured if this persists.`);
-        clearActiveSessionReference(); // Clear faulty reference
+        clearActiveSessionReference(); 
       }
     }
     
-    // Default to form state if no resumable session or error during resume
     setCurrentSession({
         sessionId: generateSessionId(),
         userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
@@ -163,12 +157,12 @@ export default function NepraCompliancePage() {
   const handleFetchQuestions = async (sessionToUpdate: ComplianceSession, isNewSession: boolean) => {
     if (!sessionToUpdate.userProfile.department || !sessionToUpdate.userProfile.role) {
       setError("Department and Role are required to fetch questions.");
-      setAppState('form');
+      setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
-    setAppState(sessionToUpdate.status === 'form' ? 'form' : 'questionnaire');
+    setCurrentSession(prev => prev ? { ...prev, status: (sessionToUpdate.status === 'form' && isNewSession) ? 'form' : 'questionnaire' } : null);
 
 
     try {
@@ -183,27 +177,26 @@ export default function NepraCompliancePage() {
         const errorMessage = fetchedQuestionTexts[0] || 'No questions were returned for your department/role. Please try again or contact support.';
         setError(errorMessage);
         toast({ title: "Error Fetching Questions", description: errorMessage, variant: "destructive" });
-        setAppState('form');
+        setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
       } else {
         const questionDefinitions: QuestionDefinition[] = fetchedQuestionTexts.map((qText, index) => ({
           id: `q_${sessionToUpdate.sessionId}_${index}`,
           questionText: qText,
-          category: "NEPRA Compliance", // Default category, AI might refine later
+          category: "NEPRA Compliance", 
         }));
 
         const updatedSessionData = {
           ...sessionToUpdate,
           questions: questionDefinitions,
-          responses: isNewSession ? {} : sessionToUpdate.responses, // Clear responses for new session
+          responses: isNewSession ? {} : sessionToUpdate.responses,
           currentQuestionIndex: isNewSession ? 0 : Math.min(sessionToUpdate.currentQuestionIndex, questionDefinitions.length -1),
           status: 'questionnaire' as ComplianceSession['status']
         };
         setCurrentSession(updatedSessionData);
         
         if (isNewSession) {
-            await startNewComplianceSession(updatedSessionData); // This saves profile, questions, initial status
+            await startNewComplianceSession(updatedSessionData);
         } else {
-            // Only update questions if they were re-fetched for an existing session
             await updateComplianceSession(updatedSessionData.sessionId, { questions: questionDefinitions });
         }
         saveActiveSessionReference({ 
@@ -223,7 +216,7 @@ export default function NepraCompliancePage() {
       }
       setError(userErrorMessage);
       toast({ title: "Error", description: userErrorMessage, variant: "destructive" });
-      setAppState('form');
+      setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
     } finally {
       setIsLoading(false);
     }
@@ -266,7 +259,7 @@ export default function NepraCompliancePage() {
       questionText: questionDef.questionText,
       answerText: answerText,
       timestamp: new Date().toISOString(),
-      nepraCategory: questionDef.category, // Or potentially AI-derived category later
+      nepraCategory: questionDef.category,
       riskLevel: 'not_assessed', 
     };
     
@@ -306,7 +299,6 @@ export default function NepraCompliancePage() {
         });
         await updateComplianceSession(currentSession.sessionId, { 
             currentQuestionIndex: currentSession.currentQuestionIndex,
-            // lastSavedTime will be updated in Firestore by addResponseToSession or updateComplianceSession
         });
 
         toast({
@@ -338,14 +330,14 @@ export default function NepraCompliancePage() {
   const handleSubmitAndGenerateReport = async () => {
     if (!currentSession || !currentSession.userProfile) {
       setError("Session data or user profile is not available. Please fill out the form again.");
-      setAppState('form');
+      setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
       return;
     }
     await saveCurrentProgress(); 
 
     setIsLoading(true);
     setError(null);
-    setAppState('generating_report');
+    setCurrentSession(prev => prev ? { ...prev, status: 'generating_report' } : null);
 
     const reportAnswers: Record<string, ReportAnswerDetail> = {};
     currentSession.questions.forEach((qDef, index) => {
@@ -401,7 +393,7 @@ export default function NepraCompliancePage() {
       console.error("Error generating report:", e);
       setError(`Failed to generate report: ${e.message}.`);
       toast({ title: "Report Generation Failed", description: `Could not generate the report: ${e.message}`, variant: "destructive"});
-      setAppState('questionnaire'); 
+      setCurrentSession(prev => prev ? { ...prev, status: 'questionnaire' } : null); 
     } finally {
       setIsLoading(false);
     }
@@ -430,7 +422,28 @@ export default function NepraCompliancePage() {
 
   return (
     <div className="space-y-8">
-      {error && (
+      {/* Display general errors first, especially if it's a critical Firebase init error */}
+      {error && (appState === 'error' || !isFirebaseInitialized) && (
+         <Alert variant="destructive" className="max-w-2xl mx-auto">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{isFirebaseInitialized ? "Error" : "Application Initialization Error"}</AlertTitle>
+          <AlertDescription>
+            {error}
+            {appState === 'error' && <Button onClick={handleStartNew} variant="outline" className="mt-4">Try to Reset and Start New</Button>}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Only show form if Firebase is initialized and appState is 'form' and no critical error displayed above */}
+      {isFirebaseInitialized && appState === 'form' && !error && (
+        <DepartmentRoleForm
+            onSubmit={handleDepartmentRoleSubmit}
+            initialProfile={currentSession?.userProfile || lastPersistedProfile}
+            isLoading={isLoading} />
+      )}
+
+      {/* Show non-critical errors if Firebase is fine but other errors occurred */}
+      {error && appState !== 'error' && isFirebaseInitialized && (
          <Alert variant="destructive" className="max-w-2xl mx-auto">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -438,25 +451,7 @@ export default function NepraCompliancePage() {
         </Alert>
       )}
 
-      {appState === 'error' && !isLoading && (
-         <Alert variant="destructive" className="max-w-2xl mx-auto">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Application Initialization Error</AlertTitle>
-          <AlertDescription>
-            {error || "A critical error occurred during application startup. Please ensure Firebase is correctly configured and try again."}
-            <Button onClick={handleStartNew} variant="outline" className="mt-4">Try to Reset and Start New</Button>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {appState === 'form' && (
-        <DepartmentRoleForm
-            onSubmit={handleDepartmentRoleSubmit}
-            initialProfile={currentSession?.userProfile || lastPersistedProfile}
-            isLoading={isLoading} />
-      )}
-
-      {appState === 'questionnaire' && currentSession && currentSession.questions && currentSession.questions.length > 0 && (
+      {isFirebaseInitialized && appState === 'questionnaire' && currentSession && currentSession.questions && currentSession.questions.length > 0 && (
         <QuestionCard
           question={currentSession.questions[currentSession.currentQuestionIndex]?.questionText || "Loading question..."}
           questionNumber={currentSession.currentQuestionIndex + 1}
@@ -473,14 +468,14 @@ export default function NepraCompliancePage() {
         />
       )}
       
-      {appState === 'questionnaire' && currentSession && (!currentSession.questions || currentSession.questions.length === 0) && isLoading && (
+      {isFirebaseInitialized && appState === 'questionnaire' && currentSession && (!currentSession.questions || currentSession.questions.length === 0) && isLoading && (
         <div className="text-center py-10">
             <LoadingSpinner text="Preparing NEPRA compliance questions for your role..."/>
             <p className="mt-4 text-muted-foreground">If this takes too long, please check your role/department selection or connection.</p>
         </div>
       )}
 
-      {appState === 'report_ready' && generatedReportContent && (
+      {isFirebaseInitialized && appState === 'report_ready' && generatedReportContent && (
         <ReportDisplay
             report={generatedReportContent}
             onStartNew={handleStartNew}
@@ -488,7 +483,7 @@ export default function NepraCompliancePage() {
         />
       )}
        
-       {appState === 'report_ready' && !generatedReportContent && ( 
+       {isFirebaseInitialized && appState === 'report_ready' && !generatedReportContent && ( 
             <Alert variant="default" className="max-w-2xl mx-auto">
                 <AlertCircle className="h-4 w-4" />
                 <AlertTitle>Report Status</AlertTitle>
@@ -500,11 +495,11 @@ export default function NepraCompliancePage() {
                     }
                      <Button onClick={handleStartNew} variant="outline" className="mt-4 ml-2">Start New Questionnaire</Button>
                 </AlertDescription>
-
             </Alert>
        )}
       
-      {(appState !== 'initial' && appState !== 'generating_report' && !(appState === 'error' && !currentSession) ) && (
+      {/* Show reset button if not in initial state, not generating report, and not in a hard Firebase error state */}
+      {(appState !== 'initial' && appState !== 'generating_report' && !(appState === 'error' && !isFirebaseInitialized) ) && (
          <div className="text-center mt-8">
           <Button variant="outline" onClick={handleStartNew} className="text-destructive hover:text-destructive-foreground hover:bg-destructive/90 border-destructive hover:border-destructive/80">
             Reset and Start New Questionnaire

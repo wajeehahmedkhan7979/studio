@@ -139,7 +139,6 @@ export default function NepraCompliancePage() {
                 setIsLoading(false);
             } else {
                  console.log("Session exists, but questions missing and no profile info to fetch them. Reverting to form.");
-                 // This case might mean user cleared profile after session start. Revert to form.
                  setCurrentSession({
                     sessionId: generateSessionId(),
                     userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
@@ -174,7 +173,7 @@ export default function NepraCompliancePage() {
     });
     setIsLoading(false);
     console.log("App initialized to form state.");
-  }, []); 
+  }, [toast]); 
 
   useEffect(() => {
     initializeOrResumeApp();
@@ -191,7 +190,6 @@ export default function NepraCompliancePage() {
     }
     setIsLoading(true);
     console.log("HFQ: setIsLoading(true). Current status before AI call:", sessionToUpdate.status);
-    // Determine target status before async calls to avoid race conditions with re-renders
     const targetStatus = (sessionToUpdate.status === 'form' && isNewSession) ? 'form' : 'questionnaire';
     setCurrentSession(prev => prev ? { ...prev, status: targetStatus } : null);
 
@@ -212,6 +210,7 @@ export default function NepraCompliancePage() {
         setError(errorMessage);
         toast({ title: "Error Fetching Questions", description: errorMessage, variant: "destructive" });
         setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
+        setIsLoading(false); // Explicitly set isLoading(false) in this error path
       } else {
         console.log("HFQ: Successfully fetched questions:", fetchedQuestionTexts.length);
         const questionDefinitions: QuestionDefinition[] = fetchedQuestionTexts.map((qText, index) => ({
@@ -285,7 +284,6 @@ export default function NepraCompliancePage() {
     setCurrentSession(initialSession);
     console.log("DepartmentRoleSubmit: Initial session object created, status 'form'. Calling handleFetchQuestions.");
     await handleFetchQuestions(initialSession, true); 
-    // isLoading is managed by handleFetchQuestions
     console.log("DepartmentRoleSubmit: handleFetchQuestions completed.");
   };
 
@@ -521,7 +519,7 @@ export default function NepraCompliancePage() {
           onSubmitAll={handleSubmitAndGenerateReport}
           isFirstQuestion={currentSession.currentQuestionIndex === 0}
           isLastQuestion={currentSession.currentQuestionIndex === currentSession.questions.length - 1}
-          isLoading={isLoading} // This is the page-level isLoading
+          isLoading={isLoading} 
         />
       )}
       

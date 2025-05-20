@@ -205,12 +205,16 @@ export default function NepraCompliancePage() {
       
       const fetchedQuestionTexts = result.questions || [];
       if (fetchedQuestionTexts.length === 0 || (fetchedQuestionTexts.length === 1 && fetchedQuestionTexts[0].startsWith("Error:"))) {
-        const errorMessage = fetchedQuestionTexts[0] || 'No questions were returned for your department/role. Please try again or contact support.';
+        let errorMessage = fetchedQuestionTexts[0] || 'No questions were returned for your department/role. Please try again or contact support.';
+        // Standardize error message if it indicates overload, even if returned by the AI flow directly
+        if (errorMessage.toLowerCase().includes("overloaded") || errorMessage.toLowerCase().includes("service unavailable") || errorMessage.includes("503")) {
+            errorMessage = "AI Service Overloaded: The AI service is currently experiencing high demand. Please try again in a few minutes.";
+        }
         console.error("HFQ: Error from AI or no questions:", errorMessage);
         setError(errorMessage);
         toast({ title: "Error Fetching Questions", description: errorMessage, variant: "destructive" });
         setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
-        setIsLoading(false); // Explicitly set isLoading(false) in this error path
+        setIsLoading(false); 
       } else {
         console.log("HFQ: Successfully fetched questions:", fetchedQuestionTexts.length);
         const questionDefinitions: QuestionDefinition[] = fetchedQuestionTexts.map((qText, index) => ({
@@ -563,3 +567,4 @@ export default function NepraCompliancePage() {
     </div>
   );
 }
+

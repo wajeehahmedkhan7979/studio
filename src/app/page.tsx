@@ -158,7 +158,7 @@ export default function NepraCompliancePage() {
             }
             return;
           }
-        } else { // No session found in Firestore for ID
+        } else {
           console.log("HFQ: No session found in Firestore for ID:", activeSessionRef.sessionId, ". Starting fresh.");
           clearActiveSessionReference();
         }
@@ -183,7 +183,7 @@ export default function NepraCompliancePage() {
     });
     setIsLoading(false);
     console.log("App initialized to form state.");
-  }, [toast]); 
+  }, [toast]); // Added toast to dependency array
 
   useEffect(() => {
     initializeOrResumeApp();
@@ -220,7 +220,7 @@ export default function NepraCompliancePage() {
       const fetchedQuestionTexts = result.questions || [];
       if (fetchedQuestionTexts.length === 0 || (fetchedQuestionTexts.length === 1 && fetchedQuestionTexts[0].startsWith("Error:"))) {
         let errorMessage = fetchedQuestionTexts[0] || 'No questions were returned for your department/role. Please try again or contact support.';
-        if (errorMessage.toLowerCase().includes("overloaded") || errorMessage.toLowerCase().includes("service unavailable") || errorMessage.includes("503")) {
+         if (errorMessage.toLowerCase().includes("overloaded") || errorMessage.toLowerCase().includes("service unavailable") || errorMessage.includes("503") || errorMessage.toLowerCase().includes("model is overloaded")) {
             errorMessage = "AI Service Overloaded: The AI service is currently experiencing high demand. Please try again in a few minutes.";
         }
         console.error("HFQ: Error from AI or no questions:", errorMessage);
@@ -507,8 +507,8 @@ export default function NepraCompliancePage() {
   
   // Render loading spinner for initial load or critical loading phases
   if (appState === 'initial' || (isLoading && !currentSession?.sessionId && appState !== 'error') ) {
-    // More specific loading text if Firebase is not initialized vs. general init
-    return <LoadingSpinner text={!isFirebaseInitialized ? "Verifying Firebase Setup..." : "Initializing Compliance Agent..."} className="mt-20" />;
+    // Use a consistent initial loading text to avoid hydration mismatch
+    return <LoadingSpinner text={"Initializing Compliance Agent..."} className="mt-20" />;
   }
   
   // More specific loading states

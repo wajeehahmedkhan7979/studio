@@ -7,7 +7,6 @@ import type {
   ComplianceSession,
   ResponseData,
   QuestionDefinition,
-  ReportAnswerDetail,
   GenerateNepraReportInput as AppGenerateNepraReportInput,
   QuestionnaireDataForReport as AppQuestionnaireDataForReport,
 } from '@/lib/types';
@@ -66,35 +65,26 @@ export default function NepraCompliancePage() {
   const { toast } = useToast();
   const appState = currentSession?.status || 'initial';
 
+
   const handleFetchQuestions = useCallback(async (sessionToUpdate: ComplianceSession, isNewSession: boolean): Promise<boolean> => {
-    // isLoading is set by the calling function (handleDepartmentRoleSubmit or initializeOrResumeApp)
-    // This function is responsible for resetting isLoading via its finally block.
-
     let fetchSuccess = false;
-    let dbOperationSuccessful = true; // Assume success for paths that don't involve DB writes for questions
-
+    let dbOperationSuccessful = true;
     const targetStatusOnError: ComplianceSession['status'] = 'form';
-    // Optimistically set target status for success, will be reverted on error
     const targetStatusOnSuccess: ComplianceSession['status'] = 'questionnaire';
 
-
     // Optimistically update session status for UI responsiveness
-    // This will be reverted if any step fails
     setCurrentSession(prev => {
-        if (!prev && !sessionToUpdate) return null; // Should not happen
+        if (!prev && !sessionToUpdate) return null;
         const baseSession = prev || sessionToUpdate;
         return { ...baseSession, status: targetStatusOnSuccess };
     });
-
 
     try {
       if (!sessionToUpdate.userProfile.department || !sessionToUpdate.userProfile.role) {
         setError("Department and Role are required to fetch questions.");
         setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
-        // No direct setIsLoading(false) here; finally block will handle it.
-        return false; // Indicate failure
+        return false;
       }
-
       setError(null);
 
       const tailorInput: TailorNepraQuestionsInput = {
@@ -102,8 +92,12 @@ export default function NepraCompliancePage() {
         role: sessionToUpdate.userProfile.role,
       };
       const result: TailoredQuestionsOutput = await tailorNepraQuestions(tailorInput);
+      
+      let fetchedQuestionTexts = result.questions || [];
+      // Filter out any empty strings or strings that are only whitespace
+      fetchedQuestionTexts = fetchedQuestionTexts.filter(q => q && q.trim() !== "");
 
-      const fetchedQuestionTexts = result.questions || [];
+
       if (fetchedQuestionTexts.length === 0 || (fetchedQuestionTexts.length === 1 && fetchedQuestionTexts[0].startsWith("Error:"))) {
         let errorMessage = fetchedQuestionTexts[0] || 'No questions were returned for your department/role. Please try again or contact support.';
         if (errorMessage.toLowerCase().includes("overloaded") || errorMessage.toLowerCase().includes("service unavailable") || errorMessage.includes("503") || errorMessage.toLowerCase().includes("model is overloaded")) {
@@ -112,7 +106,7 @@ export default function NepraCompliancePage() {
         setError(errorMessage);
         toast({ title: "Error Fetching Questions", description: errorMessage, variant: "destructive" });
         setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
-        dbOperationSuccessful = false; // Mark as failure if AI questions fail
+        dbOperationSuccessful = false;
       } else {
         const questionDefinitions: QuestionDefinition[] = fetchedQuestionTexts.map((qText, index) => ({
           id: `q_${sessionToUpdate.sessionId}_${index}`,
@@ -125,11 +119,9 @@ export default function NepraCompliancePage() {
           questions: questionDefinitions,
           responses: isNewSession ? {} : sessionToUpdate.responses,
           currentQuestionIndex: isNewSession ? 0 : Math.min(sessionToUpdate.currentQuestionIndex || 0, questionDefinitions.length - 1),
-          status: targetStatusOnSuccess // Keep optimistic status for now
+          status: targetStatusOnSuccess
         };
-        // Update current session with new questions before DB operations
         setCurrentSession(updatedSessionDataWithQuestions);
-
 
         if (isNewSession) {
           try {
@@ -143,15 +135,14 @@ export default function NepraCompliancePage() {
               const userProf = (prev || updatedSessionDataWithQuestions).userProfile;
               return {
                 userProfile: userProf,
-                sessionId: generateSessionId(),
+                sessionId: generateSessionId(), // Generate a new ID for a fresh attempt
                 questions: [], responses: {}, currentQuestionIndex: 0,
                 startTime: new Date().toISOString(), reportGenerated: false, status: targetStatusOnError,
-                averagePolicyMaturity: 0, averagePracticeMaturity: 0
               };
             });
             dbOperationSuccessful = false;
           }
-        } else { // Resuming session, update questions if they were re-fetched
+        } else {
           try {
             if (JSON.stringify(updatedSessionDataWithQuestions.questions) !== JSON.stringify(sessionToUpdate.questions)) {
               await updateComplianceSession(updatedSessionDataWithQuestions.sessionId, { questions: questionDefinitions });
@@ -167,35 +158,31 @@ export default function NepraCompliancePage() {
 
       if (dbOperationSuccessful) {
         saveActiveSessionReference({
-          sessionId: sessionToUpdate.sessionId, // Use sessionToUpdate's ID as it's the one used for DB ops
-          userProfile: sessionToUpdate.userProfile,
-          currentQuestionIndex: (currentSession || sessionToUpdate).currentQuestionIndex, // Use latest index
+          sessionId: (currentSession || sessionToUpdate).sessionId,
+          userProfile: (currentSession || sessionToUpdate).userProfile,
+          currentQuestionIndex: (currentSession || sessionToUpdate).currentQuestionIndex,
         });
-        setError(null); // Clear previous errors on success
+        setError(null);
         fetchSuccess = true;
-        // Status is already optimistically 'questionnaire', so no change needed here if successful
       } else {
         fetchSuccess = false;
-        // Explicitly ensure status is 'form' if any DB or AI op critical for 'questionnaire' state failed
+        // Ensure status is 'form' if any critical DB or AI op failed
         setCurrentSession(prev => {
             if (!prev) return null;
             const userProf = prev.userProfile;
-            // If it was a new session attempt that failed at DB stage
-            if (isNewSession) {
+            if (isNewSession) { // If it was a new session attempt that failed
                 return {
-                    userProfile: userProf, // Keep entered profile
-                    sessionId: generateSessionId(), // Get a new ID for a fresh attempt
+                    userProfile: userProf,
+                    sessionId: generateSessionId(),
                     questions: [], responses: {}, currentQuestionIndex: 0,
                     startTime: new Date().toISOString(), reportGenerated: false, status: targetStatusOnError,
-                    averagePolicyMaturity: 0, averagePracticeMaturity: 0,
                 };
             } else { // If it was a resume attempt and updating questions failed
-                return { ...prev, status: targetStatusOnError, questions: [] }; // Revert to form, clear potentially bad questions
+                return { ...prev, status: targetStatusOnError, questions: [] };
             }
         });
       }
-
-    } catch (e: any) { // Catch errors from AI call or other unexpected issues
+    } catch (e: any) {
       let userErrorMessage = 'Failed to load questions. Please check your connection or try again.';
       if (e.message?.includes("FAILED_PRECONDITION") && (e.message?.includes("GEMINI_API_KEY") || e.message?.includes("GOOGLE_API_KEY"))) {
         userErrorMessage = "AI Configuration Error: The current AI provider (Google Gemini) is missing its API key. If you intend to use IBM Watsonx, ensure the Watsonx Genkit plugin is installed and configured in src/ai/genkit.ts, and .env variables are set.";
@@ -208,16 +195,14 @@ export default function NepraCompliancePage() {
       setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
       fetchSuccess = false;
     } finally {
-      // This is crucial: always reset isLoading, regardless of success or failure.
-      // The calling function (handleDepartmentRoleSubmit or initializeOrResumeApp) sets isLoading to true.
       setIsLoading(false);
     }
     return fetchSuccess;
-  }, [toast, setIsLoading, setError, setCurrentSession]); // appState and isLoading removed as per new strategy
+  }, [toast, setCurrentSession, setError, setIsLoading]);
 
 
   const initializeOrResumeApp = useCallback(async () => {
-    setIsLoading(true); // Set loading at the start of initialization
+    setIsLoading(true);
     setError(null);
 
     if (!isFirebaseInitialized) {
@@ -228,7 +213,6 @@ export default function NepraCompliancePage() {
           userProfile: loadUserProfileFromStorage() || { name: '', email: '', department: '', role: '' },
           questions: [], responses: {}, currentQuestionIndex: 0,
           startTime: new Date().toISOString(), reportGenerated: false,
-          averagePolicyMaturity: 0, averagePracticeMaturity: 0,
         }),
         status: 'error'
       }));
@@ -256,40 +240,39 @@ export default function NepraCompliancePage() {
             let currentQuestionIndex = 0;
             if (firestoreSession.questions && firestoreSession.questions.length > 0) {
               currentQuestionIndex = firestoreSession.currentQuestionIndex < firestoreSession.questions.length ? firestoreSession.currentQuestionIndex : Math.min(numResponses, firestoreSession.questions.length - 1);
+              if (currentQuestionIndex < 0) currentQuestionIndex = 0; // Ensure non-negative index
             }
-            if (currentQuestionIndex < 0) currentQuestionIndex = 0;
+
 
             const updatedSession: ComplianceSession = {
               ...firestoreSession,
               currentQuestionIndex: currentQuestionIndex,
-              status: 'questionnaire'
+              status: 'questionnaire' // Default to questionnaire if session is valid
             };
             setCurrentSession(updatedSession);
 
             if ((!firestoreSession.questions || firestoreSession.questions.length === 0) && firestoreSession.userProfile.department && firestoreSession.userProfile.role) {
               const fetchSuccess = await handleFetchQuestions(updatedSession, false);
               if (!fetchSuccess) {
-                // handleFetchQuestions already sets error and reverts to form, isLoading is handled by its finally block.
-                // No explicit setIsLoading(false) here as handleFetchQuestions' finally will do it.
+                 // handleFetchQuestions manages isLoading and reverts to 'form' on critical failure
               }
             } else if (!firestoreSession.questions || firestoreSession.questions.length === 0) {
               setCurrentSession({
-                sessionId: generateSessionId(),
+                sessionId: generateSessionId(), // New session if old one had no questions
                 userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
                 questions: [], responses: {}, currentQuestionIndex: 0,
                 startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
-                averagePolicyMaturity: 0, averagePracticeMaturity: 0,
               });
             }
           }
         } else {
+          // No session found in Firestore for the ID in local storage
           clearActiveSessionReference();
           setCurrentSession({
             sessionId: generateSessionId(),
             userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
             questions: [], responses: {}, currentQuestionIndex: 0,
             startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
-            averagePolicyMaturity: 0, averagePracticeMaturity: 0,
           });
         }
       } catch (e: any) {
@@ -301,21 +284,18 @@ export default function NepraCompliancePage() {
           userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
           questions: [], responses: {}, currentQuestionIndex: 0,
           startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
-          averagePolicyMaturity: 0, averagePracticeMaturity: 0,
         });
       }
-    } else {
+    } else { // No active session reference in local storage
       setCurrentSession({
         sessionId: generateSessionId(),
         userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
         questions: [], responses: {}, currentQuestionIndex: 0,
         startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
-        averagePolicyMaturity: 0, averagePracticeMaturity: 0,
       });
     }
-    // If not already set to false by a nested async call like handleFetchQuestions
-    if(isLoading) setIsLoading(false);
-  }, [toast, handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]); // isLoading removed
+     if(isLoading) setIsLoading(false); // Ensure isLoading is false if not handled by nested calls
+  }, [toast, handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]);
 
   useEffect(() => {
     initializeOrResumeApp();
@@ -326,7 +306,6 @@ export default function NepraCompliancePage() {
   const handleDepartmentRoleSubmit = useCallback(async (profile: UserProfile) => {
     if (!isFirebaseInitialized) {
       setError("Application not initialized. Cannot submit. Please ensure Firebase is configured.");
-      // setIsLoading(false); // No need, initial isLoading=true is fine, will be reset by initializeOrResumeApp or error display
       return;
     }
     setIsLoading(true);
@@ -343,11 +322,9 @@ export default function NepraCompliancePage() {
       currentQuestionIndex: 0,
       startTime: new Date().toISOString(),
       reportGenerated: false,
-      status: 'form', // Will transition after fetch
-      averagePolicyMaturity: 0,
-      averagePracticeMaturity: 0,
+      status: 'form',
     };
-    setCurrentSession(initialSession); // Set session data first
+    setCurrentSession(initialSession);
 
     const success = await handleFetchQuestions(initialSession, true);
     if (!success) {
@@ -356,7 +333,7 @@ export default function NepraCompliancePage() {
     }
     // If successful, isLoading is reset by handleFetchQuestions' finally block
     // and app state will be 'questionnaire'.
-  }, [handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]); // isLoading removed
+  }, [handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]);
 
 
   const handleAnswerTextChange = (text: string) => {
@@ -369,7 +346,7 @@ export default function NepraCompliancePage() {
       if (!prev) return null;
       const existingResponse = prev.responses[questionDef.id] || {
         questionId: questionDef.id,
-        questionText: questionDef.questionText, // Stored with response for context
+        questionText: questionDef.questionText,
         policyMaturityScore: DEFAULT_POLICY_SCORE,
         practiceMaturityScore: DEFAULT_PRACTICE_SCORE,
         timestamp: new Date().toISOString(),
@@ -459,8 +436,7 @@ export default function NepraCompliancePage() {
             policyMaturityScore: currentResponse.policyMaturityScore !== undefined ? currentResponse.policyMaturityScore : DEFAULT_POLICY_SCORE,
             practiceMaturityScore: currentResponse.practiceMaturityScore !== undefined ? currentResponse.practiceMaturityScore : DEFAULT_PRACTICE_SCORE,
             timestamp: currentResponse.timestamp || new Date().toISOString(),
-            nepraCategory: questionDef.category,
-            riskLevel: currentResponse.riskLevel || 'not_assessed',
+            nepraCategory: questionDef.category, // Use category from QuestionDefinition
         };
 
         await addResponseToSession(currentSession.sessionId, responseToSave);
@@ -471,6 +447,7 @@ export default function NepraCompliancePage() {
         });
         await updateComplianceSession(currentSession.sessionId, {
           currentQuestionIndex: currentSession.currentQuestionIndex,
+          responses: { [responseToSave.questionId]: responseToSave } // Send only the current response for update
         });
         toast({
           title: "Progress Saved",
@@ -502,17 +479,17 @@ export default function NepraCompliancePage() {
 
     setIsLoading(true);
     try {
-      await saveCurrentProgress();
+      await saveCurrentProgress(); // saveCurrentProgress now handles its own isLoading for the save part
       const nextIndex = currentSession.currentQuestionIndex + 1;
       if (nextIndex < currentSession.questions.length) {
         setCurrentSession(prev => prev ? { ...prev, currentQuestionIndex: nextIndex } : null);
       } else {
         setCurrentSession(prev => prev ? { ...prev, status: 'generating_report' } : null);
       }
-    } catch (error) {
+    } catch (error) { // This catch is for errors during saveCurrentProgress or state updates
        toast({ title: "Navigation Error", description: "Could not proceed to next question.", variant: "destructive" });
     } finally {
-      setIsLoading(false);
+      setIsLoading(false); // This ensures isLoading is false after navigation logic
     }
   }, [currentSession, saveCurrentProgress, toast, setIsLoading, setCurrentSession]);
 
@@ -521,26 +498,27 @@ export default function NepraCompliancePage() {
     if (!currentSession || !currentSession.userProfile || currentSession.status !== 'generating_report') {
       if (currentSession && currentSession.status !== 'generating_report') {
           setCurrentSession(prev => prev ? { ...prev, status: 'generating_report'} : null);
-          return;
+          return; // Let the useEffect trigger the actual generation
       }
       setError("Session data or user profile is not available. Please fill out the form again.");
       setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
-      setIsLoading(false); // Ensure loading is stopped if this path is hit
+      setIsLoading(false);
       return;
     }
 
-    setIsLoading(true); // Set loading true for report generation
+    setIsLoading(true);
     setError(null);
 
     try {
-      // Save the very last question's state before generating report
-      if (currentSession.questions.length > 0 &&
-          currentSession.currentQuestionIndex === currentSession.questions.length -1 &&
-          currentSession.responses[currentSession.questions[currentSession.currentQuestionIndex].id]?.answerText
-         ) {
-          await saveCurrentProgress();
+      // Ensure the very last question's state is saved before generating report
+      if (currentSession.questions.length > 0) {
+          const lastQIndex = currentSession.questions.length - 1;
+          const lastQDef = currentSession.questions[lastQIndex];
+          if (currentSession.currentQuestionIndex === lastQIndex &&
+              currentSession.responses[lastQDef.id]?.answerText) {
+            await saveCurrentProgress();
+          }
       }
-
 
       const reportAnswers: Record<string, ReportAnswerDetail> = {};
       let totalPolicyScore = 0;
@@ -561,13 +539,13 @@ export default function NepraCompliancePage() {
           totalPolicyScore += response.policyMaturityScore;
           totalPracticeScore += response.practiceMaturityScore;
           answeredQuestionsCount++;
-        } else {
+        } else { // Include unanswered questions in the report
             reportAnswers[qDef.id] = {
                 question: qDef.questionText,
                 answerText: "[No answer provided]",
-                policyMaturityScore: 0,
+                policyMaturityScore: 0, // Or some other indicator for unanswered
                 practiceMaturityScore: 0,
-                timestamp: new Date().toISOString(),
+                timestamp: new Date().toISOString(), // Placeholder timestamp
                 nepraCategory: qDef.category,
             };
         }
@@ -577,8 +555,8 @@ export default function NepraCompliancePage() {
       const averagePracticeMaturity = answeredQuestionsCount > 0 ? parseFloat((totalPracticeScore / answeredQuestionsCount).toFixed(1)) : 0;
 
       const questionnaireDataForReport: AppQuestionnaireDataForReport = {
-        questions: currentSession.questions,
-        answers: reportAnswers,
+        questions: currentSession.questions, // Send all original questions
+        answers: reportAnswers, // Send all (answered or marked as unanswered)
         averagePolicyMaturity: averagePolicyMaturity,
         averagePracticeMaturity: averagePracticeMaturity,
       };
@@ -587,7 +565,7 @@ export default function NepraCompliancePage() {
         userProfile: currentSession.userProfile,
         questionnaireData: questionnaireDataForReport,
         sessionId: currentSession.sessionId,
-        reportDate: new Date().toLocaleDateString('en-CA'),
+        reportDate: new Date().toLocaleDateString('en-CA'), // YYYY-MM-DD
         completedTime: new Date().toISOString(),
       };
 
@@ -608,12 +586,11 @@ export default function NepraCompliancePage() {
       const updatedSessionOnComplete: Partial<ComplianceSession> = {
         reportGenerated: true,
         completedTime: completedTime,
-        reportUrl: reportStorageUrl || undefined,
+        reportUrl: reportStorageUrl || undefined, // Use empty string if no URL
         status: 'report_ready',
         averagePolicyMaturity: averagePolicyMaturity,
         averagePracticeMaturity: averagePracticeMaturity,
       };
-      // Update current session state immediately
       setCurrentSession(prev => prev ? { ...prev, ...updatedSessionOnComplete, status: 'report_ready' } as ComplianceSession : null);
       await updateComplianceSession(currentSession.sessionId, updatedSessionOnComplete);
       clearActiveSessionReference();
@@ -621,19 +598,18 @@ export default function NepraCompliancePage() {
     } catch (e: any) {
       setError(`Failed to generate or finalize report: ${e.message}.`);
       toast({ title: "Report Finalization Failed", description: `Could not complete the report process: ${e.message}`, variant: "destructive" });
-      setCurrentSession(prev => prev ? { ...prev, status: 'questionnaire' } : null); // Revert to questionnaire on failure
+      setCurrentSession(prev => prev ? { ...prev, status: 'questionnaire' } : null);
     } finally {
       setIsLoading(false);
     }
   }, [currentSession, toast, setIsLoading, setError, setCurrentSession, saveCurrentProgress]);
 
-  // Effect to trigger report generation when status changes to 'generating_report'
   useEffect(() => {
     if (currentSession?.status === 'generating_report') {
       handleSubmitAndGenerateReport();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSession?.status, handleSubmitAndGenerateReport]); // Added handleSubmitAndGenerateReport
+  }, [currentSession?.status, handleSubmitAndGenerateReport]);
 
 
   const handlePreviousQuestion = () => {
@@ -642,18 +618,18 @@ export default function NepraCompliancePage() {
   };
 
   const handleStartNew = useCallback(() => {
+    setIsLoading(true); // Set loading true, initializeOrResumeApp will take over
     clearActiveSessionReference();
-    setCurrentSession(null);
+    setCurrentSession(null); // This will trigger useEffect for initializeOrResumeApp
     setGeneratedReportContent(null);
     setError(null);
-    setIsLoading(true); // initializeOrResumeApp will take over
-  }, [setIsLoading, setError, setCurrentSession, setGeneratedReportContent]); // Removed initializeOrResumeApp from deps
+    // initializeOrResumeApp will eventually set isLoading to false
+  }, [setIsLoading, setError, setCurrentSession, setGeneratedReportContent]);
 
-  // More specific initial loading condition
-  const showInitialSpinner = appState === 'initial' || (isLoading && !currentSession?.questions?.length && appState !== 'error');
+  const showInitialSpinner = appState === 'initial' || (isLoading && !currentSession?.questions?.length && appState !== 'error' && !error);
 
 
-  if (appState === 'error' && !isFirebaseInitialized) { // Critical Firebase init error takes precedence
+  if (appState === 'error' && !isFirebaseInitialized) {
     return (
         <div className="space-y-8 pb-16">
             <Alert variant="destructive" className="max-w-2xl mx-auto mt-20">
@@ -678,7 +654,6 @@ export default function NepraCompliancePage() {
 
   return (
     <div className="space-y-8 pb-16">
-      {/* General error display, but not for Firebase init error if already handled */}
       {error && !(appState === 'error' && !isFirebaseInitialized) && (
         <Alert variant="destructive" className="max-w-2xl mx-auto">
           <AlertCircle className="h-4 w-4" />
@@ -690,13 +665,12 @@ export default function NepraCompliancePage() {
         </Alert>
       )}
 
-      {/* More specific loading spinner */}
-      {isLoading && appState !== 'initial' && (
+      {isLoading && appState !== 'initial' && appState !== 'error' && (
         <LoadingSpinner
           text={
             appState === 'generating_report' ? "Finalizing Report..." :
-            (appState === 'questionnaire' && currentSession?.questions?.length && currentSession.currentQuestionIndex < currentSession.questions.length) ? "Saving / Loading Next Question..." :
-            (appState === 'form' && currentSession?.userProfile?.department) ? "Fetching Questions..." : // When form submitted, fetching questions
+            (appState === 'form' && currentSession?.userProfile?.department) ? "Fetching Questions..." :
+            (appState === 'questionnaire' && currentSession?.questions?.length) ? "Saving / Loading Next Question..." :
             "Processing..."
           }
           className="mt-20" />
@@ -734,7 +708,7 @@ export default function NepraCompliancePage() {
 
             isFirstQuestion={currentSession.currentQuestionIndex === 0}
             isLastQuestion={currentSession.currentQuestionIndex === currentSession.questions.length - 1}
-            isLoading={isLoading} // Pass isLoading for button states
+            isLoading={isLoading}
           />
         )}
       </Suspense>
@@ -774,4 +748,3 @@ export default function NepraCompliancePage() {
     </div>
   );
 }
-

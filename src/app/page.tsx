@@ -8,13 +8,12 @@ import type {
   ResponseData,
   QuestionDefinition,
   ReportAnswerDetail,
-  SessionProgress,
-  GenerateNepraReportInput as AppGenerateNepraReportInput, // Use aliased import
-  QuestionnaireDataForReport as AppQuestionnaireDataForReport, // Use aliased import
+  GenerateNepraReportInput as AppGenerateNepraReportInput,
+  QuestionnaireDataForReport as AppQuestionnaireDataForReport,
 } from '@/lib/types';
 import { tailorNepraQuestions, TailorNepraQuestionsInput } from '@/ai/flows/tailor-questions';
 import type { TailoredQuestionsOutput } from '@/ai/flows/tailor-questions';
-import { generateNepraReport } from '@/ai/flows/generate-report'; // Removed type import for output as it's handled by function return
+import { generateNepraReport } from '@/ai/flows/generate-report';
 import type { GenerateNepraReportOutput } from '@/ai/flows/generate-report';
 
 
@@ -59,29 +58,45 @@ const DEFAULT_PRACTICE_SCORE = 5.0;
 
 export default function NepraCompliancePage() {
   const [currentSession, setCurrentSession] = useState<ComplianceSession | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); // Initialize to true for initial setup
   const [error, setError] = useState<string | null>(null);
   const [generatedReportContent, setGeneratedReportContent] = useState<string | null>(null);
   const [lastPersistedProfile, setLastPersistedProfile] = useState<UserProfile | null>(null);
-  
+
   const { toast } = useToast();
   const appState = currentSession?.status || 'initial';
 
   const handleFetchQuestions = useCallback(async (sessionToUpdate: ComplianceSession, isNewSession: boolean): Promise<boolean> => {
-    if (!sessionToUpdate.userProfile.department || !sessionToUpdate.userProfile.role) {
-      setError("Department and Role are required to fetch questions.");
-      setCurrentSession(prev => prev ? { ...prev, status: 'form' } : { ...sessionToUpdate, status: 'form' });
-      setIsLoading(false);
-      return false;
-    }
-
-    if (!isLoading) setIsLoading(true);
-    setError(null); 
-    const targetStatus = (appState === 'form' && isNewSession) ? 'form' : 'questionnaire';
-    setCurrentSession(prev => prev ? { ...prev, status: targetStatus } : { ...sessionToUpdate, status: targetStatus });
+    // isLoading is set by the calling function (handleDepartmentRoleSubmit or initializeOrResumeApp)
+    // This function is responsible for resetting isLoading via its finally block.
 
     let fetchSuccess = false;
+    let dbOperationSuccessful = true; // Assume success for paths that don't involve DB writes for questions
+
+    const targetStatusOnError: ComplianceSession['status'] = 'form';
+    // Optimistically set target status for success, will be reverted on error
+    const targetStatusOnSuccess: ComplianceSession['status'] = 'questionnaire';
+
+
+    // Optimistically update session status for UI responsiveness
+    // This will be reverted if any step fails
+    setCurrentSession(prev => {
+        if (!prev && !sessionToUpdate) return null; // Should not happen
+        const baseSession = prev || sessionToUpdate;
+        return { ...baseSession, status: targetStatusOnSuccess };
+    });
+
+
     try {
+      if (!sessionToUpdate.userProfile.department || !sessionToUpdate.userProfile.role) {
+        setError("Department and Role are required to fetch questions.");
+        setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
+        // No direct setIsLoading(false) here; finally block will handle it.
+        return false; // Indicate failure
+      }
+
+      setError(null);
+
       const tailorInput: TailorNepraQuestionsInput = {
         department: sessionToUpdate.userProfile.department,
         role: sessionToUpdate.userProfile.role,
@@ -96,70 +111,91 @@ export default function NepraCompliancePage() {
         }
         setError(errorMessage);
         toast({ title: "Error Fetching Questions", description: errorMessage, variant: "destructive" });
-        setCurrentSession(prev => prev ? { ...prev, status: 'form' } : { ...sessionToUpdate, status: 'form' });
-        fetchSuccess = false;
+        setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
+        dbOperationSuccessful = false; // Mark as failure if AI questions fail
       } else {
         const questionDefinitions: QuestionDefinition[] = fetchedQuestionTexts.map((qText, index) => ({
           id: `q_${sessionToUpdate.sessionId}_${index}`,
-          questionText: qText, // AI now prepends hint to questionText
-          category: "NEPRA Compliance", // Placeholder, AI might provide this in a more advanced setup
+          questionText: qText,
+          category: "NEPRA Compliance",
         }));
 
-        const updatedSessionData: ComplianceSession = {
+        const updatedSessionDataWithQuestions: ComplianceSession = {
           ...sessionToUpdate,
           questions: questionDefinitions,
-          responses: isNewSession ? {} : sessionToUpdate.responses, // Preserve existing responses if resuming
-          currentQuestionIndex: isNewSession ? 0 : Math.min(sessionToUpdate.currentQuestionIndex || 0, questionDefinitions.length -1), // Ensure index is valid
-          status: 'questionnaire'
+          responses: isNewSession ? {} : sessionToUpdate.responses,
+          currentQuestionIndex: isNewSession ? 0 : Math.min(sessionToUpdate.currentQuestionIndex || 0, questionDefinitions.length - 1),
+          status: targetStatusOnSuccess // Keep optimistic status for now
         };
-        setCurrentSession(updatedSessionData);
+        // Update current session with new questions before DB operations
+        setCurrentSession(updatedSessionDataWithQuestions);
 
-        let dbOperationSuccessful = true;
+
         if (isNewSession) {
           try {
-            await startNewComplianceSession(updatedSessionData);
+            await startNewComplianceSession(updatedSessionDataWithQuestions);
+            dbOperationSuccessful = true;
           } catch (dbError: any) {
-            const dbErrorMessage = `Failed to save new session to database: ${dbError.message}. Please check Firestore setup and security rules.`;
+            const dbErrorMessage = `Firebase error creating session: ${dbError.message}. Please check Firestore setup and security rules.`;
             setError(dbErrorMessage);
             toast({ title: "Database Error", description: `Could not start new session: ${dbError.message}`, variant: "destructive" });
             setCurrentSession(prev => {
-              const userProf = (prev || updatedSessionData).userProfile;
-              return { // Revert to form, generate NEW session ID if creation failed
-                userProfile: userProf, 
-                sessionId: generateSessionId(), 
+              const userProf = (prev || updatedSessionDataWithQuestions).userProfile;
+              return {
+                userProfile: userProf,
+                sessionId: generateSessionId(),
                 questions: [], responses: {}, currentQuestionIndex: 0,
-                policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {}, // Reset these as they are legacy or per-question now
-                startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
+                startTime: new Date().toISOString(), reportGenerated: false, status: targetStatusOnError,
+                averagePolicyMaturity: 0, averagePracticeMaturity: 0
               };
             });
             dbOperationSuccessful = false;
           }
-        } else { // Resuming session, update questions if they were re-fetched (e.g. if empty before)
+        } else { // Resuming session, update questions if they were re-fetched
           try {
-             // Only update questions if they actually changed or were newly fetched
-            if (JSON.stringify(updatedSessionData.questions) !== JSON.stringify(sessionToUpdate.questions)) {
-                await updateComplianceSession(updatedSessionData.sessionId, { questions: questionDefinitions });
+            if (JSON.stringify(updatedSessionDataWithQuestions.questions) !== JSON.stringify(sessionToUpdate.questions)) {
+              await updateComplianceSession(updatedSessionDataWithQuestions.sessionId, { questions: questionDefinitions });
             }
+            dbOperationSuccessful = true;
           } catch (dbError: any) {
             setError(`Failed to update session questions in database: ${dbError.message}.`);
             toast({ title: "Database Error", description: `Could not update session questions: ${dbError.message}`, variant: "destructive" });
             dbOperationSuccessful = false;
           }
         }
-
-        if (dbOperationSuccessful) {
-          saveActiveSessionReference({
-            sessionId: updatedSessionData.sessionId,
-            userProfile: updatedSessionData.userProfile, // Save profile for quick prefill
-            currentQuestionIndex: updatedSessionData.currentQuestionIndex,
-          });
-          setError(null);
-          fetchSuccess = true;
-        } else {
-          fetchSuccess = false;
-        }
       }
-    } catch (e: any) {
+
+      if (dbOperationSuccessful) {
+        saveActiveSessionReference({
+          sessionId: sessionToUpdate.sessionId, // Use sessionToUpdate's ID as it's the one used for DB ops
+          userProfile: sessionToUpdate.userProfile,
+          currentQuestionIndex: (currentSession || sessionToUpdate).currentQuestionIndex, // Use latest index
+        });
+        setError(null); // Clear previous errors on success
+        fetchSuccess = true;
+        // Status is already optimistically 'questionnaire', so no change needed here if successful
+      } else {
+        fetchSuccess = false;
+        // Explicitly ensure status is 'form' if any DB or AI op critical for 'questionnaire' state failed
+        setCurrentSession(prev => {
+            if (!prev) return null;
+            const userProf = prev.userProfile;
+            // If it was a new session attempt that failed at DB stage
+            if (isNewSession) {
+                return {
+                    userProfile: userProf, // Keep entered profile
+                    sessionId: generateSessionId(), // Get a new ID for a fresh attempt
+                    questions: [], responses: {}, currentQuestionIndex: 0,
+                    startTime: new Date().toISOString(), reportGenerated: false, status: targetStatusOnError,
+                    averagePolicyMaturity: 0, averagePracticeMaturity: 0,
+                };
+            } else { // If it was a resume attempt and updating questions failed
+                return { ...prev, status: targetStatusOnError, questions: [] }; // Revert to form, clear potentially bad questions
+            }
+        });
+      }
+
+    } catch (e: any) { // Catch errors from AI call or other unexpected issues
       let userErrorMessage = 'Failed to load questions. Please check your connection or try again.';
       if (e.message?.includes("FAILED_PRECONDITION") && (e.message?.includes("GEMINI_API_KEY") || e.message?.includes("GOOGLE_API_KEY"))) {
         userErrorMessage = "AI Configuration Error: The current AI provider (Google Gemini) is missing its API key. If you intend to use IBM Watsonx, ensure the Watsonx Genkit plugin is installed and configured in src/ai/genkit.ts, and .env variables are set.";
@@ -169,20 +205,19 @@ export default function NepraCompliancePage() {
         toast({ title: "AI Service Error", description: userErrorMessage, variant: "destructive" });
       }
       setError(userErrorMessage);
-      setCurrentSession(prev => prev ? { ...prev, status: 'form' } : { ...sessionToUpdate, status: 'form' });
+      setCurrentSession(prev => prev ? { ...prev, status: targetStatusOnError } : { ...sessionToUpdate, status: targetStatusOnError });
       fetchSuccess = false;
     } finally {
-      if (fetchSuccess === false && !error) { // Ensure error state is set if fetch failed but no specific error was caught by handlers
-          setError(prevError => prevError || "An unknown error occurred while fetching questions.");
-      }
+      // This is crucial: always reset isLoading, regardless of success or failure.
+      // The calling function (handleDepartmentRoleSubmit or initializeOrResumeApp) sets isLoading to true.
       setIsLoading(false);
     }
     return fetchSuccess;
-  }, [toast, setIsLoading, setError, setCurrentSession, appState, isLoading]);
+  }, [toast, setIsLoading, setError, setCurrentSession]); // appState and isLoading removed as per new strategy
 
 
   const initializeOrResumeApp = useCallback(async () => {
-    setIsLoading(true);
+    setIsLoading(true); // Set loading at the start of initialization
     setError(null);
 
     if (!isFirebaseInitialized) {
@@ -192,8 +227,8 @@ export default function NepraCompliancePage() {
           sessionId: generateSessionId(),
           userProfile: loadUserProfileFromStorage() || { name: '', email: '', department: '', role: '' },
           questions: [], responses: {}, currentQuestionIndex: 0,
-          policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-          startTime: new Date().toISOString(), reportGenerated: false
+          startTime: new Date().toISOString(), reportGenerated: false,
+          averagePolicyMaturity: 0, averagePracticeMaturity: 0,
         }),
         status: 'error'
       }));
@@ -209,68 +244,53 @@ export default function NepraCompliancePage() {
       try {
         const firestoreSession = await getComplianceSession(activeSessionRef.sessionId);
         if (firestoreSession) {
-          if (firestoreSession.status === 'completed' || firestoreSession.reportGenerated) { // Assuming 'completed' status exists
+          if (firestoreSession.status === 'completed' || firestoreSession.reportGenerated) {
             let reportContentToDisplay = "Previously generated report.";
             if (firestoreSession.reportUrl) {
-              // For now, just show link. Report content is not stored in session.
               reportContentToDisplay = `Report available at: ${firestoreSession.reportUrl}`;
             }
             setGeneratedReportContent(reportContentToDisplay);
             setCurrentSession({ ...firestoreSession, status: 'report_ready' });
           } else {
-            // Ensure currentQuestionIndex is valid and responses are loaded
             const numResponses = Object.keys(firestoreSession.responses || {}).length;
             let currentQuestionIndex = 0;
             if (firestoreSession.questions && firestoreSession.questions.length > 0) {
-                 currentQuestionIndex = firestoreSession.currentQuestionIndex < firestoreSession.questions.length ? firestoreSession.currentQuestionIndex : Math.min(numResponses, firestoreSession.questions.length -1);
+              currentQuestionIndex = firestoreSession.currentQuestionIndex < firestoreSession.questions.length ? firestoreSession.currentQuestionIndex : Math.min(numResponses, firestoreSession.questions.length - 1);
             }
             if (currentQuestionIndex < 0) currentQuestionIndex = 0;
-
 
             const updatedSession: ComplianceSession = {
               ...firestoreSession,
               currentQuestionIndex: currentQuestionIndex,
-              // Legacy fields below, review their necessity
-              policyAreasToRate: firestoreSession.policyAreasToRate || [], 
-              currentRatingAreaIndex: firestoreSession.currentRatingAreaIndex || 0,
-              policyScores: firestoreSession.policyScores || {}, 
-              status: 'questionnaire' // Default to questionnaire, can adjust if all questions answered
+              status: 'questionnaire'
             };
-             setCurrentSession(updatedSession);
+            setCurrentSession(updatedSession);
 
-            // If questions are missing but profile exists, try to fetch them
             if ((!firestoreSession.questions || firestoreSession.questions.length === 0) && firestoreSession.userProfile.department && firestoreSession.userProfile.role) {
-              const fetchSuccess = await handleFetchQuestions(updatedSession, false); // false because it's a resume
+              const fetchSuccess = await handleFetchQuestions(updatedSession, false);
               if (!fetchSuccess) {
-                // Revert to form if fetching questions failed on resume
-                setCurrentSession({
-                  sessionId: generateSessionId(),
-                  userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
-                  questions: [], responses: {}, currentQuestionIndex: 0,
-                  policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-                  startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
-                });
+                // handleFetchQuestions already sets error and reverts to form, isLoading is handled by its finally block.
+                // No explicit setIsLoading(false) here as handleFetchQuestions' finally will do it.
               }
             } else if (!firestoreSession.questions || firestoreSession.questions.length === 0) {
-                 // No questions and no profile info to fetch them, go to form
-                setCurrentSession({
-                  sessionId: generateSessionId(),
-                  userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
-                  questions: [], responses: {}, currentQuestionIndex: 0,
-                  policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-                  startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
-                });
-            }
-          }
-        } else { // No session found in Firestore for the stored ID
-            clearActiveSessionReference();
-            setCurrentSession({
+              setCurrentSession({
                 sessionId: generateSessionId(),
                 userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
                 questions: [], responses: {}, currentQuestionIndex: 0,
-                policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-                startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
-            });
+                startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
+                averagePolicyMaturity: 0, averagePracticeMaturity: 0,
+              });
+            }
+          }
+        } else {
+          clearActiveSessionReference();
+          setCurrentSession({
+            sessionId: generateSessionId(),
+            userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
+            questions: [], responses: {}, currentQuestionIndex: 0,
+            startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
+            averagePolicyMaturity: 0, averagePracticeMaturity: 0,
+          });
         }
       } catch (e: any) {
         setError(`Failed to resume session: ${e.message}. Starting fresh. Ensure Firebase is configured, and check security rules.`);
@@ -280,21 +300,22 @@ export default function NepraCompliancePage() {
           sessionId: generateSessionId(),
           userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
           questions: [], responses: {}, currentQuestionIndex: 0,
-          policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-          startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
+          startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
+          averagePolicyMaturity: 0, averagePracticeMaturity: 0,
         });
       }
-    } else { // No active session reference in local storage
+    } else {
       setCurrentSession({
         sessionId: generateSessionId(),
         userProfile: savedProfile || { name: '', email: '', department: '', role: '' },
         questions: [], responses: {}, currentQuestionIndex: 0,
-        policyAreasToRate: [], currentRatingAreaIndex: 0, policyScores: {},
-        startTime: new Date().toISOString(), reportGenerated: false, status: 'form'
+        startTime: new Date().toISOString(), reportGenerated: false, status: 'form',
+        averagePolicyMaturity: 0, averagePracticeMaturity: 0,
       });
     }
-    setIsLoading(false);
-  }, [toast, handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]);
+    // If not already set to false by a nested async call like handleFetchQuestions
+    if(isLoading) setIsLoading(false);
+  }, [toast, handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]); // isLoading removed
 
   useEffect(() => {
     initializeOrResumeApp();
@@ -305,7 +326,7 @@ export default function NepraCompliancePage() {
   const handleDepartmentRoleSubmit = useCallback(async (profile: UserProfile) => {
     if (!isFirebaseInitialized) {
       setError("Application not initialized. Cannot submit. Please ensure Firebase is configured.");
-      setIsLoading(false);
+      // setIsLoading(false); // No need, initial isLoading=true is fine, will be reset by initializeOrResumeApp or error display
       return;
     }
     setIsLoading(true);
@@ -320,23 +341,24 @@ export default function NepraCompliancePage() {
       questions: [],
       responses: {},
       currentQuestionIndex: 0,
-      policyAreasToRate: [], // Legacy, review
-      currentRatingAreaIndex: 0, // Legacy, review
-      policyScores: {}, // Legacy, review
       startTime: new Date().toISOString(),
       reportGenerated: false,
-      status: 'form', // Will transition to 'questionnaire' after fetch
+      status: 'form', // Will transition after fetch
+      averagePolicyMaturity: 0,
+      averagePracticeMaturity: 0,
     };
-    setCurrentSession(initialSession);
+    setCurrentSession(initialSession); // Set session data first
 
     const success = await handleFetchQuestions(initialSession, true);
     if (!success) {
-        if (isLoading) setIsLoading(false); // Ensure isLoading is reset if fetch failed
-        // Error handling already done in handleFetchQuestions
+        // Error handling (toast, setError, reverting to form) is done within handleFetchQuestions
+        // isLoading is also reset within handleFetchQuestions' finally block.
     }
-  }, [handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile, isLoading]);
+    // If successful, isLoading is reset by handleFetchQuestions' finally block
+    // and app state will be 'questionnaire'.
+  }, [handleFetchQuestions, setIsLoading, setError, setCurrentSession, setLastPersistedProfile]); // isLoading removed
 
-  // Handlers for QuestionCard's new props
+
   const handleAnswerTextChange = (text: string) => {
     if (!currentSession || !currentSession.questions || currentSession.questions.length === 0 || currentSession.status !== 'questionnaire') return;
     const qIndex = currentSession.currentQuestionIndex;
@@ -347,7 +369,7 @@ export default function NepraCompliancePage() {
       if (!prev) return null;
       const existingResponse = prev.responses[questionDef.id] || {
         questionId: questionDef.id,
-        questionText: questionDef.questionText,
+        questionText: questionDef.questionText, // Stored with response for context
         policyMaturityScore: DEFAULT_POLICY_SCORE,
         practiceMaturityScore: DEFAULT_PRACTICE_SCORE,
         timestamp: new Date().toISOString(),
@@ -427,10 +449,9 @@ export default function NepraCompliancePage() {
 
     const currentResponse = currentSession.responses[questionDef.id];
 
-    if (currentResponse && currentResponse.answerText) { // Only save if there's an answer text
+    if (currentResponse && currentResponse.answerText) {
       setIsLoading(true);
       try {
-        // Ensure all fields for ResponseData are present before saving
         const responseToSave: ResponseData = {
             questionId: currentResponse.questionId,
             questionText: currentResponse.questionText,
@@ -438,17 +459,16 @@ export default function NepraCompliancePage() {
             policyMaturityScore: currentResponse.policyMaturityScore !== undefined ? currentResponse.policyMaturityScore : DEFAULT_POLICY_SCORE,
             practiceMaturityScore: currentResponse.practiceMaturityScore !== undefined ? currentResponse.practiceMaturityScore : DEFAULT_PRACTICE_SCORE,
             timestamp: currentResponse.timestamp || new Date().toISOString(),
-            nepraCategory: questionDef.category, // Or from response if available
+            nepraCategory: questionDef.category,
             riskLevel: currentResponse.riskLevel || 'not_assessed',
         };
 
         await addResponseToSession(currentSession.sessionId, responseToSave);
-        saveActiveSessionReference({ // Save current index to local storage
+        saveActiveSessionReference({
           sessionId: currentSession.sessionId,
           userProfile: currentSession.userProfile,
           currentQuestionIndex: currentSession.currentQuestionIndex,
         });
-        // Main session document currentQuestionIndex also needs update
         await updateComplianceSession(currentSession.sessionId, {
           currentQuestionIndex: currentSession.currentQuestionIndex,
         });
@@ -470,7 +490,7 @@ export default function NepraCompliancePage() {
 
   const handleNextQuestion = useCallback(async () => {
     if (!currentSession || currentSession.status !== 'questionnaire' || currentSession.questions.length === 0) return;
-    
+
     const qIndex = currentSession.currentQuestionIndex;
     const questionDef = currentSession.questions[qIndex];
     const currentResponse = currentSession.responses[questionDef.id];
@@ -479,71 +499,49 @@ export default function NepraCompliancePage() {
         toast({title: "Incomplete Answer", description: "Please provide an answer before proceeding.", variant: "destructive"});
         return;
     }
-    // policy/practice scores have defaults, so main validation is on answerText
 
     setIsLoading(true);
     try {
-      await saveCurrentProgress(); // Save the current question's state first
-      
+      await saveCurrentProgress();
       const nextIndex = currentSession.currentQuestionIndex + 1;
       if (nextIndex < currentSession.questions.length) {
         setCurrentSession(prev => prev ? { ...prev, currentQuestionIndex: nextIndex } : null);
-      } else { // All questions answered
+      } else {
         setCurrentSession(prev => prev ? { ...prev, status: 'generating_report' } : null);
-        // Automatically call handleSubmitAndGenerateReport after state update
-        // This ensures the status is 'generating_report' before the AI call
       }
     } catch (error) {
-       // Error during saveCurrentProgress is handled within it (toast)
-       // but ensure loading state is reset if it hangs or throws an unhandled one
        toast({ title: "Navigation Error", description: "Could not proceed to next question.", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   }, [currentSession, saveCurrentProgress, toast, setIsLoading, setCurrentSession]);
 
-  // Effect to trigger report generation when status changes to 'generating_report'
-  useEffect(() => {
-    if (currentSession?.status === 'generating_report') {
-      handleSubmitAndGenerateReport();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSession?.status]);
-
-
-  const handlePreviousQuestion = () => {
-    if (!currentSession || currentSession.status !== 'questionnaire' || currentSession.currentQuestionIndex <= 0) return;
-    // Consider saving progress before going back, or decide if changes to current q are lost
-    setCurrentSession(prev => prev ? { ...prev, currentQuestionIndex: prev.currentQuestionIndex - 1 } : null);
-  };
-
 
   const handleSubmitAndGenerateReport = useCallback(async () => {
     if (!currentSession || !currentSession.userProfile || currentSession.status !== 'generating_report') {
-      // If status isn't generating_report, it means this was called prematurely or from wrong state
       if (currentSession && currentSession.status !== 'generating_report') {
-          setCurrentSession(prev => prev ? { ...prev, status: 'generating_report'} : null); // Trigger it correctly
-          return; // useEffect will pick it up
+          setCurrentSession(prev => prev ? { ...prev, status: 'generating_report'} : null);
+          return;
       }
       setError("Session data or user profile is not available. Please fill out the form again.");
       setCurrentSession(prev => prev ? { ...prev, status: 'form' } : null);
-      setIsLoading(false);
+      setIsLoading(false); // Ensure loading is stopped if this path is hit
       return;
     }
-    
-    // Ensure all progress is saved one last time before generating report
-    // This is especially important if the user clicks "Submit All" from the last question
-    // without explicitly clicking "Next" on it.
-    if (currentSession.questions.length > 0 && 
-        currentSession.currentQuestionIndex === currentSession.questions.length -1) {
-        await saveCurrentProgress();
-    }
 
-
-    setIsLoading(true);
+    setIsLoading(true); // Set loading true for report generation
     setError(null);
 
     try {
+      // Save the very last question's state before generating report
+      if (currentSession.questions.length > 0 &&
+          currentSession.currentQuestionIndex === currentSession.questions.length -1 &&
+          currentSession.responses[currentSession.questions[currentSession.currentQuestionIndex].id]?.answerText
+         ) {
+          await saveCurrentProgress();
+      }
+
+
       const reportAnswers: Record<string, ReportAnswerDetail> = {};
       let totalPolicyScore = 0;
       let totalPracticeScore = 0;
@@ -551,7 +549,7 @@ export default function NepraCompliancePage() {
 
       currentSession.questions.forEach((qDef) => {
         const response = currentSession.responses[qDef.id];
-        if (response && response.answerText) { // Only include answered questions in averages
+        if (response && response.answerText) {
           reportAnswers[qDef.id] = {
             question: qDef.questionText,
             answerText: response.answerText,
@@ -563,13 +561,13 @@ export default function NepraCompliancePage() {
           totalPolicyScore += response.policyMaturityScore;
           totalPracticeScore += response.practiceMaturityScore;
           answeredQuestionsCount++;
-        } else { // Handle unanswered questions in the report
+        } else {
             reportAnswers[qDef.id] = {
                 question: qDef.questionText,
                 answerText: "[No answer provided]",
-                policyMaturityScore: 0, // Or some indicator for N/A
-                practiceMaturityScore: 0, // Or some indicator for N/A
-                timestamp: new Date().toISOString(), // Placeholder timestamp
+                policyMaturityScore: 0,
+                practiceMaturityScore: 0,
+                timestamp: new Date().toISOString(),
                 nepraCategory: qDef.category,
             };
         }
@@ -579,17 +577,17 @@ export default function NepraCompliancePage() {
       const averagePracticeMaturity = answeredQuestionsCount > 0 ? parseFloat((totalPracticeScore / answeredQuestionsCount).toFixed(1)) : 0;
 
       const questionnaireDataForReport: AppQuestionnaireDataForReport = {
-        questions: currentSession.questions, // Pass QuestionDefinition[]
+        questions: currentSession.questions,
         answers: reportAnswers,
         averagePolicyMaturity: averagePolicyMaturity,
         averagePracticeMaturity: averagePracticeMaturity,
       };
-      
+
       const reportInput: AppGenerateNepraReportInput = {
         userProfile: currentSession.userProfile,
         questionnaireData: questionnaireDataForReport,
         sessionId: currentSession.sessionId,
-        reportDate: new Date().toLocaleDateString('en-CA'), // YYYY-MM-DD format
+        reportDate: new Date().toLocaleDateString('en-CA'),
         completedTime: new Date().toISOString(),
       };
 
@@ -598,7 +596,7 @@ export default function NepraCompliancePage() {
 
       const completedTime = new Date().toISOString();
       let reportStorageUrl = '';
-      if (result.reportContent && result.reportContent !== "Error: Failed to generate report content. The AI service might be temporarily unavailable or unable to process the request. Please try again.") {
+      if (result.reportContent && !result.reportContent.startsWith("Error:")) {
         try {
           reportStorageUrl = await uploadReportToStorage(currentSession.sessionId, result.reportContent, `compliance_report_${currentSession.sessionId}.md`);
           toast({ title: "Report Uploaded", description: "Compliance report saved to secure storage." });
@@ -612,10 +610,13 @@ export default function NepraCompliancePage() {
         completedTime: completedTime,
         reportUrl: reportStorageUrl || undefined,
         status: 'report_ready',
+        averagePolicyMaturity: averagePolicyMaturity,
+        averagePracticeMaturity: averagePracticeMaturity,
       };
+      // Update current session state immediately
       setCurrentSession(prev => prev ? { ...prev, ...updatedSessionOnComplete, status: 'report_ready' } as ComplianceSession : null);
       await updateComplianceSession(currentSession.sessionId, updatedSessionOnComplete);
-      clearActiveSessionReference(); 
+      clearActiveSessionReference();
 
     } catch (e: any) {
       setError(`Failed to generate or finalize report: ${e.message}.`);
@@ -626,56 +627,81 @@ export default function NepraCompliancePage() {
     }
   }, [currentSession, toast, setIsLoading, setError, setCurrentSession, saveCurrentProgress]);
 
+  // Effect to trigger report generation when status changes to 'generating_report'
+  useEffect(() => {
+    if (currentSession?.status === 'generating_report') {
+      handleSubmitAndGenerateReport();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.status, handleSubmitAndGenerateReport]); // Added handleSubmitAndGenerateReport
+
+
+  const handlePreviousQuestion = () => {
+    if (!currentSession || currentSession.status !== 'questionnaire' || currentSession.currentQuestionIndex <= 0) return;
+    setCurrentSession(prev => prev ? { ...prev, currentQuestionIndex: prev.currentQuestionIndex - 1 } : null);
+  };
 
   const handleStartNew = useCallback(() => {
     clearActiveSessionReference();
-    setCurrentSession(null); 
+    setCurrentSession(null);
     setGeneratedReportContent(null);
     setError(null);
-    setIsLoading(true); 
-    // initializeOrResumeApp will be called by useEffect due to currentSession becoming null
-  }, [setIsLoading, setError, setCurrentSession, setGeneratedReportContent]);
-  
-  const showInitialSpinner = appState === 'initial' || (isLoading && !error && (!currentSession || (currentSession.questions.length === 0 && appState === 'questionnaire')));
+    setIsLoading(true); // initializeOrResumeApp will take over
+  }, [setIsLoading, setError, setCurrentSession, setGeneratedReportContent]); // Removed initializeOrResumeApp from deps
 
-  if (isLoading && (appState === 'initial' || (appState === 'form' && !currentSession?.userProfile.department))) { // More specific initial loading
-    return <LoadingSpinner text="Initializing Compliance Agent..." className="mt-20" />;
+  // More specific initial loading condition
+  const showInitialSpinner = appState === 'initial' || (isLoading && !currentSession?.questions?.length && appState !== 'error');
+
+
+  if (appState === 'error' && !isFirebaseInitialized) { // Critical Firebase init error takes precedence
+    return (
+        <div className="space-y-8 pb-16">
+            <Alert variant="destructive" className="max-w-2xl mx-auto mt-20">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Application Initialization Error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+            </Alert>
+        </div>
+    );
   }
-  if (showInitialSpinner && !isFirebaseInitialized && typeof window !== 'undefined') {
-      // This case is handled by the main error display block if isFirebaseInitialized is false
-  } else if (showInitialSpinner) {
-    return <LoadingSpinner text={appState === 'initial' ? "Initializing Compliance Agent..." : "Loading Session & Questions..."} className="mt-20" />;
+
+  if (showInitialSpinner) {
+    return <LoadingSpinner text="Initializing Compliance Agent..." className="mt-20" />;
   }
 
   const renderSuspenseFallback = (text: string) => <LoadingSpinner text={text} className="mt-20" />;
 
-  // Get current question data
-  const currentQDef = currentSession?.questions[currentSession.currentQuestionIndex];
+  const currentQDef = currentSession?.questions && currentSession.questions.length > currentSession.currentQuestionIndex
+    ? currentSession.questions[currentSession.currentQuestionIndex]
+    : undefined;
   const currentQResponse = currentQDef ? currentSession?.responses[currentQDef.id] : undefined;
 
   return (
-    <div className="space-y-8 pb-16"> {/* Added padding bottom */}
-      {error && (appState === 'error' || !isFirebaseInitialized) && (
+    <div className="space-y-8 pb-16">
+      {/* General error display, but not for Firebase init error if already handled */}
+      {error && !(appState === 'error' && !isFirebaseInitialized) && (
         <Alert variant="destructive" className="max-w-2xl mx-auto">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>{!isFirebaseInitialized ? "Application Initialization Error" : "Error"}</AlertTitle>
+          <AlertTitle>Error Encountered</AlertTitle>
           <AlertDescription>
             {error}
-            {appState === 'error' && isFirebaseInitialized && <Button onClick={handleStartNew} variant="outline" className="mt-4">Try to Reset and Start New</Button>}
+            {isFirebaseInitialized && <Button onClick={handleStartNew} variant="outline" className="mt-4">Try to Reset and Start New</Button>}
           </AlertDescription>
         </Alert>
       )}
 
-      {isLoading && appState !== 'initial' && appState !=='error' && !showInitialSpinner && (
-        <LoadingSpinner 
+      {/* More specific loading spinner */}
+      {isLoading && appState !== 'initial' && (
+        <LoadingSpinner
           text={
             appState === 'generating_report' ? "Finalizing Report..." :
-            (appState === 'questionnaire' && isLoading) ? "Saving / Loading Next Question..." : // More specific for questionnaire loading
+            (appState === 'questionnaire' && currentSession?.questions?.length && currentSession.currentQuestionIndex < currentSession.questions.length) ? "Saving / Loading Next Question..." :
+            (appState === 'form' && currentSession?.userProfile?.department) ? "Fetching Questions..." : // When form submitted, fetching questions
             "Processing..."
-          } 
+          }
           className="mt-20" />
       )}
-      
+
       <Suspense fallback={renderSuspenseFallback("Loading User Information Form...")}>
         {!isLoading && isFirebaseInitialized && appState === 'form' && !error && currentSession && (
           <DepartmentRoleForm
@@ -685,42 +711,34 @@ export default function NepraCompliancePage() {
         )}
       </Suspense>
 
-      {error && appState !== 'error' && isFirebaseInitialized && !isLoading && (
-        <Alert variant="destructive" className="max-w-2xl mx-auto">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error Encountered</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      
       <Suspense fallback={renderSuspenseFallback("Loading Questionnaire...")}>
         {!isLoading && isFirebaseInitialized && appState === 'questionnaire' && currentSession && currentSession.questions && currentSession.questions.length > 0 && currentQDef && (
           <QuestionCard
             question={currentQDef.questionText || "Loading question..."}
             questionNumber={currentSession.currentQuestionIndex + 1}
             totalQuestions={currentSession.questions.length}
-            
+
             answerText={currentQResponse?.answerText || ''}
             onAnswerTextChange={handleAnswerTextChange}
-            
+
             policyMaturityScore={currentQResponse?.policyMaturityScore !== undefined ? currentQResponse.policyMaturityScore : DEFAULT_POLICY_SCORE}
             onPolicyMaturityScoreChange={handlePolicyScoreChange}
-            
+
             practiceMaturityScore={currentQResponse?.practiceMaturityScore !== undefined ? currentQResponse.practiceMaturityScore : DEFAULT_PRACTICE_SCORE}
             onPracticeMaturityScoreChange={handlePracticeScoreChange}
-            
+
             onNext={handleNextQuestion}
             onPrevious={handlePreviousQuestion}
             onSaveProgress={saveCurrentProgress}
-            onSubmitAll={() => setCurrentSession(prev => prev ? {...prev, status: 'generating_report'} : null) } // Transition to generating_report
-            
+            onSubmitAll={() => setCurrentSession(prev => prev ? {...prev, status: 'generating_report'} : null) }
+
             isFirstQuestion={currentSession.currentQuestionIndex === 0}
             isLastQuestion={currentSession.currentQuestionIndex === currentSession.questions.length - 1}
-            isLoading={isLoading}
+            isLoading={isLoading} // Pass isLoading for button states
           />
         )}
       </Suspense>
-      
+
       <Suspense fallback={renderSuspenseFallback("Loading Report...")}>
         {!isLoading && isFirebaseInitialized && appState === 'report_ready' && generatedReportContent && (
           <ReportDisplay
@@ -756,3 +774,4 @@ export default function NepraCompliancePage() {
     </div>
   );
 }
+

@@ -11,11 +11,8 @@ export interface UserProfile {
 // Structure for a question definition (potentially from a 'questions' collection)
 export interface QuestionDefinition {
   id: string;
-  questionText: string;
-  category: string; // e.g., Access Control, Incident Response // Main NEPRA category or AI-inferred
-  // Example: "🛈 NEPRA Section 4.3 requires documenting incident response procedures. How does your team document these?"
-  // The hint is now part of questionText
-  // hint?: string; // Brief NEPRA context or explanation for the question
+  questionText: string; // Includes AI-generated NEPRA hint, e.g., "🛈 NEPRA Section X.Y: Your question..."
+  category: string; // Main NEPRA category or AI-inferred
 }
 
 // Structure for a single response within a session
@@ -23,6 +20,8 @@ export interface ResponseData {
   questionId: string; // Corresponds to QuestionDefinition.id
   questionText: string; // Storing the question text with the answer for context
   answerText: string;
+  policyMaturityScore: number; // Score from 0.0 to 10.0
+  practiceMaturityScore: number; // Score from 0.0 to 10.0
   timestamp: string; // ISO string format
   riskLevel?: 'low' | 'medium' | 'high' | 'not_assessed'; // For future risk analysis
   nepraCategory?: string; // Derived or pre-assigned NEPRA category
@@ -35,13 +34,19 @@ export interface ComplianceSession {
   questions: QuestionDefinition[]; // The set of questions for this session
   responses: Record<string, ResponseData>; // questionId maps to ResponseData
   currentQuestionIndex: number; // Index for the 'questions' array
-  policyAreasToRate: string[]; // Key policy areas for rating
-  currentRatingAreaIndex: number; // Index for the 'policyAreasToRate' array
-  policyScores: Record<string, number>; // policyAreaName maps to rating score (0.0-10.0)
+  
+  // These policyAreasToRate and currentRatingAreaIndex are from a previous iteration.
+  // The new requirement is per-question scoring, not overall policy area rating.
+  // I'll keep them for now but they might become obsolete or repurposed.
+  // For now, they are NOT being used in the primary question flow.
+  policyAreasToRate: string[];
+  currentRatingAreaIndex: number;
+  policyScores: Record<string, number>; // This was for overall department ratings, potentially to be removed or rethought.
+
   startTime: string; // ISO string format for session start
   lastSavedTime?: string; // ISO string format for last save/resume
   completedTime?: string; // ISO string format for when questionnaire was completed
-  status: 'initial' | 'form' | 'questionnaire' | 'collecting_ratings' | 'generating_report' | 'report_ready' | 'error';
+  status: 'initial' | 'form' | 'questionnaire' | 'generating_report' | 'report_ready' | 'error'; // Removed 'collecting_ratings' as ratings are per-question
   reportGenerated: boolean;
   reportUrl?: string; // URL if report is stored (e.g., Firebase Storage)
 }
@@ -52,33 +57,52 @@ export interface SessionProgress {
   sessionId?: string;
   userProfile?: UserProfile;
   currentQuestionIndex?: number;
-  currentRatingAreaIndex?: number; // To resume rating at the correct point
-  policyScores?: Record<string, number>; // To store partially collected ratings
+  // currentRatingAreaIndex and policyScores here were for the separate rating phase.
+  // Since ratings are now per-question, these might not be needed in local storage for resume
+  // unless we want to pre-fill the sliders of the current question on resume.
+  // For simplicity, current resume will load all answered questions, and the current question will start fresh with sliders.
 }
 
+// Data for the report generation flow
+export interface QuestionnaireDataForReport {
+  questions: QuestionDefinition[]; // Array of QuestionDefinition objects
+  answers: Record<string, ReportAnswerDetail>; // questionId (string) maps to the user's detailed answer object.
+  averagePolicyMaturity?: number;
+  averagePracticeMaturity?: number;
+  policyScores?: Record<string, number>; // This was for overall department ratings. To be reviewed.
+}
 
-// Input for the generateNepraReport Genkit flow
-export interface ReportGenerationInput {
-  session: ComplianceSession; // Contains userProfile, and all questions/responses
+// Detailed answer structure for the report
+export type ReportAnswerDetail = {
+  question: string; // The full question text
+  answerText: string;
+  policyMaturityScore: number;
+  practiceMaturityScore: number;
+  timestamp: string;
+  nepraCategory?: string;
+};
+
+// Input for the tailorNepraQuestions Genkit flow
+export interface TailorNepraQuestionsInput {
+  department: string;
+  role: string;
 }
 
 // Output for the tailorNepraQuestions Genkit flow
 export interface TailoredQuestionsOutput {
-  questions: string[]; // List of question texts, potentially with hints prepended
+  questions: string[]; // List of question texts, with hints prepended by AI
 }
 
-// For the report generation, aligning with current flow structure
-// but using more detailed ResponseData
-export interface QuestionnaireDataForReport {
-  questions: string[]; // The original question texts in order
-  // Answers map index (as string) to the detailed ReportAnswerDetail object
-  answers: Record<string, ReportAnswerDetail>;
+// Input for the generateNepraReport Genkit flow
+export interface GenerateNepraReportInput {
+  userProfile: UserProfile;
+  questionnaireData: QuestionnaireDataForReport; // Contains questions and their detailed answers including scores
+  sessionId: string;
+  reportDate: string; // YYYY-MM-DD
+  completedTime?: string; // ISO
 }
 
-// Adapting NepraAnswer for clarity, to be used by report generator
-export type ReportAnswerDetail = {
-  question: string;
-  answerText: string;
-  timestamp: string;
-  nepraCategory?: string;
-};
+// Output for the generateNepraReport Genkit flow
+export interface GenerateNepraReportOutput {
+  reportContent: string; // Markdown
+}

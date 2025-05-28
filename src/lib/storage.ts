@@ -1,8 +1,8 @@
 
 import type { UserProfile, SessionProgress } from './types';
 
-const USER_PROFILE_KEY = 'nepraAgentUserProfile_v2';
-const SESSION_PROGRESS_KEY = 'nepraAgentSessionId_v2'; // Now primarily stores session ID
+const USER_PROFILE_KEY = 'nepraAgentUserProfile_v3'; // Incremented version due to SessionProgress changes
+const SESSION_PROGRESS_KEY = 'nepraAgentSessionId_v3'; 
 
 // User Profile (collected once, could be part of session)
 export const saveUserProfileToStorage = (profile: UserProfile): void => {
@@ -28,12 +28,18 @@ export const loadUserProfileFromStorage = (): UserProfile | null => {
   return null;
 };
 
-// Nepra Session Progress - now focuses on storing the active session ID
-// and potentially some quick-access user profile data for form pre-fill.
+// Nepra Session Progress - stores active session ID and user profile for pre-fill.
+// Per-question scores are not stored here for resume; they are fetched from Firestore.
 export const saveActiveSessionReference = (progress: SessionProgress): void => {
    if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem(SESSION_PROGRESS_KEY, JSON.stringify(progress));
+      // Only save sessionId, userProfile (for prefill), and currentQuestionIndex
+      const minimalistProgress: SessionProgress = {
+        sessionId: progress.sessionId,
+        userProfile: progress.userProfile,
+        currentQuestionIndex: progress.currentQuestionIndex,
+      };
+      localStorage.setItem(SESSION_PROGRESS_KEY, JSON.stringify(minimalistProgress));
     } catch (error) {
       console.error("Error saving session reference to local storage:", error);
     }
@@ -68,6 +74,5 @@ export const clearAllNepraData = (): void => {
   if (typeof window !== 'undefined') {
     localStorage.removeItem(USER_PROFILE_KEY);
     localStorage.removeItem(SESSION_PROGRESS_KEY);
-    // Potentially clear other app-specific keys if added later
   }
 }

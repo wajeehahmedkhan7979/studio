@@ -16,21 +16,31 @@ interface DepartmentRoleFormProps {
 }
 
 const nepraDepartments = [
-  "Security Policy",
-  "Access Rights Management",
-  "VAPT (Vulnerability Assessment and Penetration Testing)",
-  "Monitoring and Incident Response",
-  "Training and Awareness",
-  "Data Backup and Confidentiality",
-  "Audit and Compliance",
-  "Reporting",
-  "SOC (Security Operations Center)",
-  "PowerCERT Coordination",
-  "IT Operations",
-  "OT Operations",
-  "Human Resources",
-  "Legal",
-  "Other",
+  "Access Control",
+  "Awareness and Training",
+  "Audit and Accountability",
+  "Configuration Management",
+  "Incident Response",
+  "Maintenance",
+  "Media Protection",
+  "Physical and Environmental Protection",
+  "Planning",
+  "Personnel Security",
+  "Risk Assessment",
+  "System and Communications Protection",
+  "System and Information Integrity",
+  "System and Services Acquisition",
+  "Monitoring",
+  "Vulnerability Assessment & Penetration Testing (VAPT)",
+  "IT Operations", // General IT
+  "OT Operations", // General OT
+  "Security Policy", // Added from previous context
+  "Reporting", // Added from previous context
+  "SOC (Security Operations Center)", // Added from previous context
+  "PowerCERT Coordination", // Added from previous context
+  "Human Resources", // Common department
+  "Legal", // Common department
+  "Other", // Fallback
 ];
 
 export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false }: DepartmentRoleFormProps) {
@@ -124,15 +134,15 @@ export function DepartmentRoleForm({ onSubmit, initialProfile, isLoading = false
               type="text"
               value={department}
               onChange={(e) => setDepartment(e.target.value)}
-              placeholder="e.g., Security Policy, VAPT, Monitoring"
+              placeholder="Select or type your department"
               list="nepra-departments-list"
               required
               className="text-base"
             />
             <datalist id="nepra-departments-list">
-              {nepraDepartments.map(dep => <option key={dep} value={dep} />)}
+              {nepraDepartments.sort().map(dep => <option key={dep} value={dep} />)}
             </datalist>
-            <p className="text-xs text-muted-foreground">Select or type your department. Examples include: {nepraDepartments.slice(0,3).join(', ')}, etc.</p>
+            <p className="text-xs text-muted-foreground">Select from the list or type if not present. This aligns with NEPRA compliance areas.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="role" className="flex items-center text-base">

@@ -7,33 +7,25 @@ import {
   doc,
   setDoc,
   getDoc,
-  // addDoc, // No longer used directly, addResponseToSession uses setDoc for idempotency
   collection,
   query as firestoreQuery,
-  // where, // Not used in current functions, but useful for querying questions collection
   getDocs,
   updateDoc,
   Timestamp,
-  // deleteDoc, // Not requested yet
-  // writeBatch, // Not requested yet
   type Firestore,
 } from 'firebase/firestore';
 import {
   getStorage,
   ref,
   uploadString,
-  uploadBytes, // Kept for flexibility, though current primary use might be string
+  uploadBytes,
   getDownloadURL,
-  // deleteObject, // Not requested yet
   type FirebaseStorage,
 } from 'firebase/storage';
-import { getAnalytics, type Analytics } from 'firebase/analytics'; // Added for Firebase Analytics
+import { getAnalytics, type Analytics } from 'firebase/analytics';
 
-// Assuming these types are correctly defined in './types'
 import type { ComplianceSession, ResponseData, QuestionDefinition, UserProfile } from './types';
 
-// Firebase Configuration using environment variables
-// Ensure NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, etc. are set in your .env.local or environment
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -41,75 +33,50 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Added for Analytics
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// Initialize Firebase
 let app: FirebaseApp | null = null;
-export let isFirebaseInitialized: boolean;
-let analytics: Analytics | null = null; // Added for Firebase Analytics
+export let isFirebaseInitialized: boolean = false;
+let analytics: Analytics | null = null;
+let db: Firestore | null = null;
+let storage: FirebaseStorage | null = null;
 
-if (typeof window !== 'undefined') { // Ensure this runs only in the client-side context
+
+if (typeof window !== 'undefined') {
   if (!getApps().length) {
-    if (firebaseConfig.apiKey && firebaseConfig.projectId) { // Basic check for config presence
+    if (firebaseConfig.apiKey && firebaseConfig.projectId) {
       try {
         app = initializeApp(firebaseConfig);
-        if (firebaseConfig.measurementId) { // Only initialize analytics if measurementId is present
+        db = getFirestore(app);
+        storage = getStorage(app);
+        if (firebaseConfig.measurementId) {
           analytics = getAnalytics(app);
         }
-        console.log("Firebase initialized successfully.");
         isFirebaseInitialized = true;
       } catch (e) {
         console.error("Error initializing Firebase:", e);
         isFirebaseInitialized = false;
-        app = null; // Ensure app is null if init fails
-        analytics = null; // Ensure analytics is null if init fails
+        app = null; db = null; storage = null; analytics = null;
       }
     } else {
       console.error("Firebase configuration is missing. Firebase not initialized.");
       isFirebaseInitialized = false;
-      app = null;
-      analytics = null;
     }
   } else {
-    app = getApp(); // Get the default app if already initialized
-    if (firebaseConfig.measurementId && app) { // Only initialize analytics if measurementId is present and app exists
+    app = getApp();
+    db = getFirestore(app);
+    storage = getStorage(app);
+    if (firebaseConfig.measurementId && app) {
         analytics = getAnalytics(app);
     }
-    console.log("Firebase app already initialized, using existing instance.");
-    isFirebaseInitialized = true; // If apps exist, assume it was successful before or by another part of the app
-  }
-} else {
-  // Server-side or during build, Firebase might not be needed or initialized here
-  console.warn("Firebase initialization skipped: not in a client-side context or Firebase already initialized by another means.");
-  isFirebaseInitialized = getApps().length > 0;
-  if (isFirebaseInitialized && !app) {
-    app = getApp(); // Try to get app if already initialized
-    if (app && typeof window !== 'undefined' && firebaseConfig.measurementId) { // Check window again before getAnalytics
-        analytics = getAnalytics(app);
-    }
+    isFirebaseInitialized = true;
   }
 }
 
-
-// Assign db and storage only if app was initialized
-const db: Firestore = app ? getFirestore(app) : (null as unknown as Firestore);
-const storage: FirebaseStorage = app ? getStorage(app) : (null as unknown as FirebaseStorage);
+export { db, storage, app, analytics };
 
 
-if (!app || !db || !storage) {
-  if (isFirebaseInitialized && (typeof window !== 'undefined') ) { // Added window check for console.error
-      console.error("Firebase services (Firestore/Storage) not available, despite app initialization. Check service setup.");
-  }
-}
-
-export { db, storage, app, analytics }; // Export app and analytics as well
-
-
-/**
- * Saves a complete new compliance session document in Firestore.
- * Collection path: /sessions/{sessionId}
- */
 export const startNewComplianceSession = async (sessionData: ComplianceSession): Promise<string> => {
   if (!db) throw new Error("Firestore not initialized. Check Firebase configuration.");
   if (!sessionData.sessionId) throw new Error("Session ID is required to start a new session.");
@@ -117,19 +84,12 @@ export const startNewComplianceSession = async (sessionData: ComplianceSession):
   try {
     const sessionRef = doc(db, 'sessions', sessionData.sessionId);
     
-    // Prepare data for Firestore: convert dates and handle complex objects
-    // Create a serializable copy of sessionData, excluding responses which are handled separately
     const { responses, ...sessionDocDataSansResponses } = sessionData;
 
-    // Type assertion for the spread object
-    const baseDataForFirestore: Omit<ComplianceSession, 'responses' | 'startTime' | 'lastSavedTime' | 'completedTime'> & {
-      startTime: Timestamp;
-      lastSavedTime: Timestamp | null;
-      completedTime: Timestamp | null;
-    } = {
-      ...sessionDocDataSansResponses, // Spread the rest of the session data
+    const baseDataForFirestore = {
+      ...sessionDocDataSansResponses,
       userProfile: sessionData.userProfile,
-      questions: sessionData.questions,
+      questions: sessionData.questions, // Store question definitions with the session
       currentQuestionIndex: sessionData.currentQuestionIndex,
       policyAreasToRate: sessionData.policyAreasToRate || [],
       currentRatingAreaIndex: sessionData.currentRatingAreaIndex || 0,
@@ -143,7 +103,6 @@ export const startNewComplianceSession = async (sessionData: ComplianceSession):
     };
 
     await setDoc(sessionRef, baseDataForFirestore);
-    console.log(`Firebase: Session ${sessionData.sessionId} successfully created.`);
     return sessionData.sessionId;
   } catch (error) {
     console.error(`Firebase: Error starting new session ${sessionData.sessionId}:`, error);
@@ -151,51 +110,35 @@ export const startNewComplianceSession = async (sessionData: ComplianceSession):
   }
 };
 
-/**
- * Updates specific fields in a session document in Firestore.
- * Path: /sessions/{sessionId}
- */
 export const updateComplianceSession = async (
   sessionId: string,
-  dataToUpdate: Partial<ComplianceSession> // Can include responses for direct updates if needed, though usually subcollection
+  dataToUpdate: Partial<ComplianceSession>
 ): Promise<void> => {
   if (!db) throw new Error("Firestore not initialized. Check Firebase configuration.");
   if (!sessionId) throw new Error("Session ID is required to update a session.");
 
   try {
     const sessionRef = doc(db, 'sessions', sessionId);
-    // Create a shallow copy to avoid modifying the original object, especially for date conversions
     const updatePayload: Record<string, any> = { ...dataToUpdate };
 
-    // Convert specific date fields from string to Firestore Timestamp if they exist
     if (dataToUpdate.startTime && typeof dataToUpdate.startTime === 'string') {
       updatePayload.startTime = Timestamp.fromDate(new Date(dataToUpdate.startTime));
     }
-    // Always update lastSavedTime to current time on any update
     updatePayload.lastSavedTime = Timestamp.now();
     
     if (dataToUpdate.completedTime && typeof dataToUpdate.completedTime === 'string') {
       updatePayload.completedTime = Timestamp.fromDate(new Date(dataToUpdate.completedTime));
     }
     
-    // Handle questions, responses, policyScores if they are part of the update directly
-    // Ensure these are structured correctly for Firestore if being updated here.
-    // Typically, 'responses' are handled in their subcollection via addResponseToSession.
-    if (updatePayload.responses) delete updatePayload.responses; // Remove if managed by subcollection
+    if (updatePayload.responses) delete updatePayload.responses; // Responses managed in subcollection
 
     await updateDoc(sessionRef, updatePayload);
-    console.log(`Firebase: Session ${sessionId} successfully updated.`);
   } catch (error) {
     console.error(`Firebase: Error updating session ${sessionId}:`, error);
     throw error;
   }
 };
 
-/**
- * Adds a response to a session's 'responses' subcollection in Firestore.
- * Path: /sessions/{sessionId}/responses/{questionId}
- * Uses questionId as the document ID for idempotency.
- */
 export const addResponseToSession = async (
   sessionId: string,
   responseData: ResponseData
@@ -205,16 +148,13 @@ export const addResponseToSession = async (
   if (!responseData.questionId) throw new Error("Question ID is required to add a response.");
 
   try {
-    // Use questionId as the document ID within the responses subcollection
     const responseRef = doc(db, 'sessions', sessionId, 'responses', responseData.questionId);
     const dataToSave = {
       ...responseData,
       timestamp: Timestamp.fromDate(new Date(responseData.timestamp)),
     };
-    await setDoc(responseRef, dataToSave); // Using setDoc to create or overwrite
-    console.log(`Firebase: Response for session ${sessionId} (question ${responseData.questionId}) saved/updated.`);
+    await setDoc(responseRef, dataToSave); // Use setDoc with questionId for idempotency
     
-    // Update the main session document's lastSavedTime
     await updateDoc(doc(db, 'sessions', sessionId), { lastSavedTime: Timestamp.now() });
     return responseData.questionId;
   } catch (error) {
@@ -223,29 +163,19 @@ export const addResponseToSession = async (
   }
 };
 
-/**
- * Retrieves a compliance session and its responses from Firestore.
- * Session: /sessions/{sessionId}
- * Responses: /sessions/{sessionId}/responses/
- */
 export const getComplianceSession = async (sessionId: string): Promise<ComplianceSession | null> => {
   if (!db) throw new Error("Firestore not initialized. Check Firebase configuration.");
-  if (!sessionId) {
-    console.warn("Firebase: getComplianceSession called with no sessionId.");
-    return null;
-  }
+  if (!sessionId) return null;
 
   try {
     const sessionRef = doc(db, 'sessions', sessionId);
     const sessionSnap = await getDoc(sessionRef);
 
     if (!sessionSnap.exists()) {
-      console.warn(`Firebase: Session ${sessionId} not found.`);
       return null;
     }
 
     const dbData = sessionSnap.data();
-    // Construct the base session object from Firestore data
     const baseSession: ComplianceSession = {
       sessionId: sessionSnap.id,
       userProfile: dbData.userProfile as UserProfile,
@@ -257,10 +187,10 @@ export const getComplianceSession = async (sessionId: string): Promise<Complianc
       status: dbData.status as ComplianceSession['status'],
       reportGenerated: (dbData.reportGenerated || false) as boolean,
       reportUrl: dbData.reportUrl as string | undefined,
-      responses: {}, // Initialize responses, to be filled next
+      responses: {}, 
       policyAreasToRate: (dbData.policyAreasToRate || []) as string[],
       currentRatingAreaIndex: (dbData.currentRatingAreaIndex || 0) as number,
-      policyScores: dbData.policyScores as Record<string, number> | undefined,
+      policyScores: (dbData.policyScores || {}) as Record<string, number>,
     };
 
     const responsesCollectionRef = collection(db, 'sessions', sessionId, 'responses');
@@ -281,44 +211,32 @@ export const getComplianceSession = async (sessionId: string): Promise<Complianc
       loadedResponses[response.questionId] = response;
     });
     
-    const fullSession: ComplianceSession = {
+    return {
         ...baseSession,
         responses: loadedResponses,
     };
-
-    console.log(`Firebase: Session ${sessionId} and ${Object.keys(fullSession.responses).length} responses retrieved.`);
-    return fullSession;
   } catch (error) {
     console.error(`Firebase: Error getting session ${sessionId}:`, error);
     throw error;
   }
 };
 
-/**
- * Uploads report content (Markdown string or a File object) to Firebase Storage.
- * Returns the download URL of the uploaded file.
- * Path example: reports/{sessionId}/your_report_name.md or .pdf
- */
 export const uploadReportToStorage = async (
   sessionId: string,
-  reportContentOrFile: string | File, // Can be Markdown string or a File object for PDF
-  reportName?: string // Optional: e.g., "compliance_report.md" or "compliance_report.pdf"
+  reportContentOrFile: string | File,
+  reportName?: string
 ): Promise<string> => {
   if (!storage) throw new Error("Firebase Storage not initialized. Check Firebase configuration.");
-  if (!sessionId) {
-    throw new Error('Missing sessionId. Cannot upload report.');
-  }
+  if (!sessionId) throw new Error('Missing sessionId. Cannot upload report.');
 
   let fullReportName: string;
   let contentType: string | undefined;
 
   if (typeof reportContentOrFile === 'string') {
-    // Handling Markdown string
     fullReportName = reportName || `nepra_compliance_report_${sessionId}.md`;
     contentType = 'text/markdown';
   } else {
-    // Handling File object (e.g., for PDF)
-    fullReportName = reportName || reportContentOrFile.name || `nepra_compliance_report_${sessionId}.pdf`; // Default to .pdf if File and no name
+    fullReportName = reportName || reportContentOrFile.name || `nepra_compliance_report_${sessionId}.pdf`;
     contentType = reportContentOrFile.type || (fullReportName.endsWith('.pdf') ? 'application/pdf' : undefined);
   }
 
@@ -328,11 +246,9 @@ export const uploadReportToStorage = async (
     if (typeof reportContentOrFile === 'string') {
       await uploadString(storageRef, reportContentOrFile, 'raw', contentType ? { contentType } : undefined);
     } else {
-      // Assuming reportContentOrFile is a File object
       await uploadBytes(storageRef, reportContentOrFile, contentType ? { contentType } : undefined);
     }
     const downloadURL = await getDownloadURL(storageRef);
-    console.log(`Firebase: Report for session ${sessionId} (${fullReportName}) uploaded to ${downloadURL}`);
     return downloadURL;
   } catch (error) {
     console.error(`Firebase: Error uploading report ${fullReportName} for session ${sessionId}:`, error);
@@ -341,14 +257,7 @@ export const uploadReportToStorage = async (
 };
 
 /*
-=== Firestore Security Rules Suggestions ===
-Ensure these are adapted to your specific authentication model (e.g., anonymous auth, custom tokens).
-This example assumes you might use Firebase Anonymous Authentication and store `request.auth.uid`
-in your `sessions/{sessionId}` document as an `ownerUid` field or similar, or if the `sessionId` itself
-is tied to the user's identity in a verifiable way (e.g., if sessionId IS the auth UID).
-
-Assume UserProfile in sessionData contains a 'uid' field: sessionData.userProfile.uid
-This 'uid' should correspond to request.auth.uid if using Firebase Authentication.
+Firestore Security Rules Suggestions:
 
 rules_version = '2';
 service cloud.firestore {
@@ -356,61 +265,77 @@ service cloud.firestore {
 
     // Sessions Collection
     match /sessions/{sessionId} {
-      // Allow create if the user is authenticated.
-      // The client should ensure sessionData.userProfile.uid is set to request.auth.uid.
-      allow create: if request.auth != null && request.resource.data.userProfile.uid == request.auth.uid;
+      // Allow create if the user is authenticated (e.g., anonymous auth).
+      // For anonymous auth, request.auth.uid will exist.
+      // If not using Firebase Auth, this rule needs adjustment, e.g., allow create: if true; (less secure).
+      allow create: if request.auth != null; // Simplest for anonymous auth being active
+                   // or if you embed a client-generated secret in sessionId and validate it here.
 
       // Allow read, update if the user "owns" the session.
-      allow read, update: if request.auth != null && resource.data.userProfile.uid == request.auth.uid;
-
-      // Optionally, allow admins to read/write (requires custom claims for admin role).
-      // allow read, write: if request.auth != null && (resource.data.userProfile.uid == request.auth.uid || request.auth.token.admin === true);
+      // This requires a way to link the request to the session owner.
+      // If using anonymous auth, you could store request.auth.uid in the session document
+      // as 'ownerUid' or similar during creation.
+      // Example assuming 'ownerUid' field:
+      // allow read, update: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+      
+      // For a simpler, less secure model for rapid development if NOT using Firebase Auth yet:
+      allow read, update: if true; // WARNING: Open access for testing. Secure this.
 
       // Restrict delete, perhaps to admins or specific conditions.
-      allow delete: if request.auth != null && request.auth.token.admin === true; // Example: Admins only
+      // allow delete: if request.auth != null && request.auth.token.admin === true; // Example: Admins only
+      allow delete: if false; // Generally, don't allow client-side deletion of sessions.
 
       // Responses Subcollection
       match /responses/{responseId} {
-        // Allow create if the user owns the parent session.
-        allow create: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userProfile.uid == request.auth.uid;
+        // Allow create if the user owns the parent session (similar logic as above for session create/update).
+        // allow create: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerUid == request.auth.uid;
+        // Simpler for testing:
+        allow create: if true; // WARNING: Open access for testing. Secure this.
         
         // Allow read if the user owns the parent session.
-        allow read: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userProfile.uid == request.auth.uid;
+        // allow read: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerUid == request.auth.uid;
+        // Simpler for testing:
+        allow read: if true; // WARNING: Open access for testing. Secure this.
         
         // Allow update if the user owns the parent session (e.g., to correct an answer).
-        // Consider if updates should be allowed or if responses are immutable once submitted.
-        allow update: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userProfile.uid == request.auth.uid;
+        // allow update: if request.auth != null && get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerUid == request.auth.uid;
+        // Simpler for testing:
+        allow update: if true; // WARNING: Open access for testing. Secure this.
 
         // Disallow delete of individual responses to maintain audit trail, unless by admin.
-        allow delete: if request.auth != null && request.auth.token.admin === true;
+        allow delete: if false; // Or check for admin role
       }
     }
   }
 }
 
-=== Firebase Storage Security Rules Suggestions ===
+Firebase Storage Security Rules Suggestions:
+
 service firebase.storage {
   match /b/{bucket}/o {
     // Reports: reports/{sessionId}/{reportFilename}
     match /reports/{sessionId}/{reportFilename} {
       // Allow write (upload) if the user owns the session.
       // This requires verifying ownership, e.g., by checking Firestore.
-      allow write: if request.auth != null &&
-                     exists(/databases/(default)/documents/sessions/$(sessionId)) &&
-                     get(/databases/(default)/documents/sessions/$(sessionId)).data.userProfile.uid == request.auth.uid;
+      // Example assuming 'ownerUid' field in session document:
+      // allow write: if request.auth != null &&
+      //                exists(/databases/(default)/documents/sessions/$(sessionId)) &&
+      //                get(/databases/(default)/documents/sessions/$(sessionId)).data.ownerUid == request.auth.uid;
+      // Simpler for testing if not using auth or ownerUid:
+      allow write: if true; // WARNING: Open access for testing. Secure this.
 
-      // Allow read if the user owns the session OR is an admin.
-      allow read: if request.auth != null && (
-                    (exists(/databases/(default)/documents/sessions/$(sessionId)) &&
-                     get(/databases/(default)/documents/sessions/$(sessionId)).data.userProfile.uid == request.auth.uid) ||
-                    request.auth.token.admin === true // Example for admin access
-                  );
+      // Allow read for admins or specific authenticated users.
+      // For simplicity, if reports are not highly sensitive during dev, allow read: if request.auth != null;
+      // For stricter access (e.g., only admins):
+      // allow read: if request.auth != null && request.auth.token.admin === true;
+      // Simpler for testing:
+      allow read: if true; // WARNING: Open access for testing. Secure this.
     }
   }
 }
 
-NOTE: The security rules above are examples. For anonymous sessions without explicit Firebase Auth UID linking,
-you might need a different strategy for 'ownership', e.g., a secret stored in the session ID itself
-or a temporary custom token. The simplest approach is to use Firebase Anonymous Authentication and
-store the `request.auth.uid` in `sessionData.userProfile.uid`.
+NOTE: The simplified security rules (allow read, write: if true;) are for DEVELOPMENT & TESTING ONLY.
+You MUST implement proper security rules based on your authentication strategy before deploying
+to production or handling any sensitive data. Using Firebase Anonymous Authentication is a good
+starting point for managing user-specific data without requiring explicit logins.
 */
